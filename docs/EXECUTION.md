@@ -1,4 +1,4 @@
-# Núcleo de ejecución — 0.2.0
+# Núcleo de ejecución
 
 Este bloque ejecuta planes GET finitos con alcance verificable por código y conserva intentos entre procesos. No es un crawler ni un detector: sus respuestas HTTP son observaciones. Para la prueba BOLA, seguí usando `lab`, que conserva su evaluador y formato 0.1.0.
 
@@ -85,4 +85,4 @@ Los comandos antiguos `lab`, `inspect` y `report` siguen leyendo/escribiendo bun
 
 La suite usa HTTP real en loopback, incluyendo caída de un proceso hijo durante una solicitud, cancelación, contención del lock, expiración, cambios de scope, presupuesto persistido, límites de respuesta y corrupción. DNS público se comprueba con un resolver controlado, sin conectarse a IPs públicas. La conexión HTTPS pública todavía no se validó en un piloto real.
 
-Node valida los contratos en ejecución y elimina los tipos de TypeScript. No hay todavía `tsc`, linter, CI ni adaptadores de scanners. No se instaló ninguna dependencia adicional para este bloque.
+Node valida los contratos en ejecución y elimina los tipos de TypeScript. No hay `tsc`, linter ni CI. El núcleo de ejecución no tiene dependencias; la única del proyecto (`playwright-core`) la usa solo `capture`.

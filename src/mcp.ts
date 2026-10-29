@@ -1,5 +1,6 @@
 import { createInterface } from 'node:readline';
 import type { Readable, Writable } from 'node:stream';
+import pkg from '../package.json' with { type: 'json' };
 import { confine, tools } from './tools.ts';
 
 const versions = ['2024-11-05', '2025-03-26', '2025-06-18'];
@@ -26,7 +27,7 @@ export function serveMcp(options: { root: string; allowNetwork: boolean; input: 
     if (method === 'initialize') {
       const requested = params?.protocolVersion;
       return send({ jsonrpc: '2.0', id, result: { protocolVersion: versions.includes(requested) ? requested : versions.at(-1),
-        capabilities: { tools: {} }, serverInfo: { name: 'bba', version: '0.9.0' } } });
+        capabilities: { tools: {} }, serverInfo: { name: 'bba', version: pkg.version } } });
     }
     if (method === 'ping') return send({ jsonrpc: '2.0', id, result: {} });
     if (method === 'tools/list') {

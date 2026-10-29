@@ -1,6 +1,6 @@
 # Roadmap interno — BBA 1.0.0
 
-Actualizado: 2026-10-29. La release actual es **0.9.0**. Este documento conserva el alcance acordado y distingue implementación de planificación; no declara lista la 1.0.0.
+Actualizado: 2026-10-29. La release actual es **1.0.0-rc.1**. Este documento conserva el alcance acordado y distingue implementación de planificación; no declara lista la 1.0.0.
 
 Objetivo: investigación reproducible de web/API, con skill, CLI/MCP, motor local, adaptadores, evidencia persistente, evaluación controlada y piloto sobre un programa con bug bounty. Distinguir detección automatizada, investigación asistida e indicios por capacidad. No prometer cobertura universal ni exigir un hallazgo productivo para declarar honesto el resultado.
 

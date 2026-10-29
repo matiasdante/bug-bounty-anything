@@ -13,7 +13,9 @@ import { evaluationFile } from './evaluation.ts';
 import { serveMcp } from './mcp.ts';
 import { resolve } from 'node:path';
 
-const help = `BBA 0.9.0 — investigaciones, capturas y superficie
+import pkg from '../package.json' with { type: 'json' };
+
+const help = `BBA ${pkg.version} — investigaciones, capturas y superficie
 
   npm run bba -- lab --variant vulnerable|fixed --out <new-directory>
   npm run bba -- inspect <directory>

@@ -1,8 +1,8 @@
 # BBA — Bug Bounty Anything
 
-Framework local de investigación de vulnerabilidades con evidencia reproducible. **Versión implementada: 0.9.0**: bloques 1 a 6 y la evaluación congelada del bloque 7 (el bloque 5 solo por importación de candidatos de ZAP, Nuclei y Subfinder) del [roadmap hacia 1.0.0](docs/ROADMAP.md). La metodología general está en [SKILL.md](SKILL.md).
+Framework local de investigación de vulnerabilidades con evidencia reproducible. **Versión implementada: 1.0.0-rc.1**: bloques 1 a 6 y la evaluación congelada del bloque 7 (el bloque 5 solo por importación de candidatos de ZAP, Nuclei y Subfinder) del [roadmap hacia 1.0.0](docs/ROADMAP.md). La metodología general está en [SKILL.md](SKILL.md).
 
-Incluye un laboratorio HTTP para detectar lectura indebida entre cuentas y un núcleo de ejecución GET con alcance explícito, presupuesto persistente, cancelación y recuperación. El núcleo admite laboratorios locales y destinos HTTPS públicos autorizados; todavía no incorpora capturas externas, scanners ni confirmación automática de vulnerabilidades fuera del laboratorio.
+Incluye un laboratorio HTTP para detectar lectura indebida entre cuentas y un núcleo de ejecución GET con alcance explícito, presupuesto persistente, cancelación y recuperación. El núcleo admite laboratorios locales y destinos HTTPS públicos autorizados. BBA no ejecuta scanners (solo importa su salida como candidatos sin validar) y la confirmación automática se limita a tres clases de autorización (BOLA, BFLA y exposición de propiedades). **Release candidate: todavía no se probó contra un programa real.**
 
 ## Requisitos y ejecución
 
@@ -131,7 +131,7 @@ El conjunto está congelado por un digest de ids, grupos y resultados esperados 
 npm install
 npm run build
 npm pack
-npm install -g .ug-bounty-anything-0.8.0.tgz
+npm install -g ./bug-bounty-anything-1.0.0-rc.1.tgz
 npx playwright-core install --only-shell chromium
 bba doctor
 ```
@@ -141,11 +141,11 @@ El paquete instalado es JavaScript compilado en `dist/` (Node no quita tipos de 
 `bba doctor` hace solo comprobaciones locales y no contacta ningún host: versión de Node, SQLite, loopback, carpeta temporal, lanzamiento de Chromium con el aislamiento y los **nombres** (no los valores) de las variables `BBA_TOKEN_*` / `BBA_COOKIE_*` presentes. Sale con código 1 si falla algo.
 
 ```powershell
-bba mcp --root C:utaalworkspace            # solo herramientas offline
-bba mcp --root C:utaalworkspace --allow-network
+bba mcp --root C:/ruta/al/workspace            # solo herramientas offline
+bba mcp --root C:/ruta/al/workspace --allow-network
 ```
 
-Servidor MCP por stdio (JSON-RPC, escrito sin dependencias: solo `initialize`, `ping` y `tools`). Expone `scope_check`, `import_surface`, `import_candidates`, `inspect_run`, `report_run`, `export_run` y `evaluate_run`. **`run`, `resume` y `capture`, que envían requests, solo existen con `--allow-network`.** Todos los paths se resuelven dentro de `--root` (los que salen se rechazan; no se siguen enlaces simbólicos, así que `--root` debe ser un workspace propio) y las salidas son siempre archivos nuevos. Las credenciales no viajan como argumentos: se leen del entorno del proceso servidor, igual que en la CLI. Los límites y el scope los define el `scope.json` que el operador preparó; un agente con permiso de escritura sobre el workspace podría editarlo, así que no le des `--allow-network` sin revisar quién escribe ahí.
+Servidor MCP por stdio (JSON-RPC, escrito sin dependencias: solo `initialize`, `ping` y `tools`). Expone `scope_check`, `import_surface`, `import_candidates`, `inspect_run`, `report_run`, `export_run` y `evaluate_run`. **`run`, `resume` y `capture`, que envían requests, solo existen con `--allow-network`.** Todos los paths se resuelven dentro de `--root`: los que salen se rechazan, también a través de enlaces simbólicos o junctions y las salidas son siempre archivos nuevos. Las credenciales no viajan como argumentos: se leen del entorno del proceso servidor, igual que en la CLI. Los límites y el scope los define el `scope.json` que el operador preparó; un agente con permiso de escritura sobre el workspace podría editarlo, así que no le des `--allow-network` sin revisar quién escribe ahí.
 
 ## Qué demuestra
 

@@ -2,15 +2,20 @@
 name: bug-bounty-anything
 description: Investigate and prepare evidence-backed vulnerability reports for web apps and APIs under an explicit program policy or written authorization (BBA). Use for authorized bug bounty and VDP investigations, including known vulnerabilities and version deltas. Exclude ordinary source-code review.
 metadata:
-  version: "0.2.0"
+  version: "1.0.0-rc.1"
 ---
 
 # BBA (Bug Bounty Anything)
 
 ## Local implementation status
 
-The bundled CLI is version 0.2.0: the original disposable authorization lab
-plus scoped GET plans, durable budgets, cancellation and resumable checkpoints.
+The bundled CLI is version 1.0.0-rc.1: the original disposable authorization lab,
+scoped GET plans with durable budgets and resumable checkpoints, offline import of
+HAR/OpenAPI/REA surfaces and ZAP/Nuclei/Subfinder candidates, browser capture,
+control/baseline/probe checks for BOLA, BFLA and property exposure, a frozen
+evaluation, an MCP server and `doctor`. It was not yet piloted on a real program.
+Imported candidates are always unvalidated; only the three check classes can be
+confirmed, and only against a scope the operator wrote from the program policy.
 See [README.md](README.md) for commands
 and [docs/ROADMAP.md](docs/ROADMAP.md) for remaining 1.0.0 capabilities.
 `npm run bba -- lab --variant vulnerable --out runs/example` runs only its
