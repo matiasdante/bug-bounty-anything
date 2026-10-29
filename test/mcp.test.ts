@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -78,6 +78,26 @@ test('MCP confines paths to the root, validates arguments and survives malformed
     s.raw('{not json');
     assert.equal((await parse).error.code, -32700);
     assert.deepEqual((await s.request('ping')).result, {}, 'still serving after a parse error');
+  } finally { assert.equal(await s.close(), 0); await rm(root, { recursive: true, force: true }); await rm(outside, { recursive: true, force: true }); }
+});
+
+test('MCP does not follow a link inside the root to a directory outside it', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'bba-mcp-'));
+  const outside = await mkdtemp(join(tmpdir(), 'bba-outside-'));
+  const s = server(root);
+  try {
+    await writeFile(join(root, 'capture.har'), JSON.stringify(har));
+    await writeFile(join(outside, 'secret.har'), JSON.stringify(har));
+    await symlink(outside, join(root, 'link'), 'junction');
+    await symlink(join(outside, 'missing'), join(root, 'dangling'), 'junction');
+    for (const args of [{ input: 'link/secret.har', out: 'ok.json' }, { input: 'capture.har', out: 'link/written.json' }, { input: 'capture.har', out: 'dangling/written.json' }]) {
+      const answer = await s.call('import_surface', { format: 'har', ...args });
+      assert.equal(answer.result.isError, true, JSON.stringify(args));
+      assert.match(answer.result.content[0].text, /outside the workspace root/);
+    }
+    await assert.rejects(readFile(join(outside, 'written.json')), /ENOENT/);
+    await assert.rejects(readFile(join(root, 'ok.json')), /ENOENT/);
+    assert.equal((await s.call('import_surface', { format: 'har', input: 'capture.har', out: 'fine.json' })).result.isError, false, 'normal paths still work');
   } finally { assert.equal(await s.close(), 0); await rm(root, { recursive: true, force: true }); await rm(outside, { recursive: true, force: true }); }
 });
 

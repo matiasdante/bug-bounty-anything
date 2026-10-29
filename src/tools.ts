@@ -1,4 +1,5 @@
-import { isAbsolute, relative, resolve } from 'node:path';
+import { lstatSync, realpathSync } from 'node:fs';
+import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { captureSurface } from './capture.ts';
 import { candidateSummary, importCandidatesFile } from './candidates.ts';
 import { evaluateRunFile } from './checks.ts';
@@ -15,10 +16,18 @@ export type Tool = {
 };
 
 // Every path is resolved inside the workspace root; the server never takes credentials as arguments.
+// Links are followed on the deepest existing ancestor, so a link inside the root cannot lead out of it.
 export function confine(root: string) {
+  const base = realpathSync(root);
+  const outside = (from: string, to: string) => { const rel = relative(from, to); return rel.startsWith('..') || isAbsolute(rel); };
   return (value: string): string => {
-    const full = resolve(root, value), rel = relative(root, full);
-    if (!rel || rel.startsWith('..') || isAbsolute(rel)) throw new Error('Path outside the workspace root');
+    const full = resolve(root, value);
+    if (!relative(root, full) || outside(root, full)) throw new Error('Path outside the workspace root');
+    let probe = full;
+    for (;;) { try { lstatSync(probe); break; } catch { probe = dirname(probe); } }
+    let real: string;
+    try { real = realpathSync(probe); } catch { throw new Error('Path outside the workspace root'); } // dangling link
+    if (outside(base, real)) throw new Error('Path outside the workspace root');
     return full;
   };
 }
