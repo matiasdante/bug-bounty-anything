@@ -1,6 +1,6 @@
 # Roadmap interno — BBA 1.0.0
 
-Actualizado: 2026-10-29. La release actual es **0.7.0**. Este documento conserva el alcance acordado y distingue implementación de planificación; no declara lista la 1.0.0.
+Actualizado: 2026-10-29. La release actual es **0.8.0**. Este documento conserva el alcance acordado y distingue implementación de planificación; no declara lista la 1.0.0.
 
 Objetivo: investigación reproducible de web/API, con skill, CLI/MCP, motor local, adaptadores, evidencia persistente, evaluación controlada y piloto sobre un programa con bug bounty. Distinguir detección automatizada, investigación asistida e indicios por capacidad. No prometer cobertura universal ni exigir un hallazgo productivo para declarar honesto el resultado.
 
@@ -11,7 +11,7 @@ Objetivo: investigación reproducible de web/API, con skill, CLI/MCP, motor loca
 | 3. Captura y superficie | Implementado en 0.5.0: importación offline HAR/OpenAPI/REA, captura con navegador (Bearer o Cookie) con aislamiento; captura pública sin probar contra un host real | HAR/OpenAPI, navegación autenticada, inventario con procedencia y REA. Importar no debe contactar URLs; separar observaciones e inferencias. |
 | 4. Investigación y confirmación | Implementado en 0.6.0 para BOLA, BFLA y exposición de propiedades en laboratorio propio | Ampliar controles baseline/probe, roles y clases. Cada capacidad declarada debe distinguir sus casos vulnerables, corregidos e inconclusos. |
 | 5. Adaptadores | Implementado en 0.7.0 solo por importación (ZAP, Nuclei, Subfinder); BBA no ejecuta scanners ni consulta advisories | ZAP, Nuclei revisado/versionado y Subfinder; advisories y deltas. Normalizar resultados, respetar presupuestos y validar candidatos antes de confirmar. |
-| 6. Producto utilizable | Parcial: CLI, recuperación y exportación | Falta MCP, instalación distribuible y diagnóstico. La CLI 0.2.0 retoma sesiones y exporta metadatos verificables. |
+| 6. Producto utilizable | Implementado en 0.8.0: CLI, recuperación, exportación, MCP por stdio, `doctor` y paquete instalable | Instalación comprobada desde el tarball; el MCP expone herramientas de red solo con `--allow-network`. |
 | 7. RC y piloto productivo | Pendiente | Evaluación congelada, selección de programa, recorrido acotado, revisión de resultados y correcciones. |
 
 ## Decisiones de implementación

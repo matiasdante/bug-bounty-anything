@@ -4,3 +4,6 @@ runs/
 .env.*
 !.env.example
 *.log
+dist/
+*.tgz
+.build-test/

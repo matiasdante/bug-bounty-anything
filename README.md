@@ -1,6 +1,6 @@
 # BBA — Bug Bounty Anything
 
-Framework local de investigación de vulnerabilidades con evidencia reproducible. **Versión implementada: 0.7.0**: bloques 1 a 4 y el bloque 5 por importación (candidatos de ZAP, Nuclei y Subfinder) del [roadmap hacia 1.0.0](docs/ROADMAP.md). La metodología general está en [SKILL.md](SKILL.md).
+Framework local de investigación de vulnerabilidades con evidencia reproducible. **Versión implementada: 0.8.0**: bloques 1 a 6 (el bloque 5 solo por importación de candidatos de ZAP, Nuclei y Subfinder) del [roadmap hacia 1.0.0](docs/ROADMAP.md). La metodología general está en [SKILL.md](SKILL.md).
 
 Incluye un laboratorio HTTP para detectar lectura indebida entre cuentas y un núcleo de ejecución GET con alcance explícito, presupuesto persistente, cancelación y recuperación. El núcleo admite laboratorios locales y destinos HTTPS públicos autorizados; todavía no incorpora capturas externas, scanners ni confirmación automática de vulnerabilidades fuera del laboratorio.
 
@@ -107,6 +107,28 @@ BBA **no ejecuta** ZAP, Nuclei ni Subfinder: sus efectos activos no pasan por el
 - Duplicados (misma regla, método y path) se colapsan y se cuentan. **Los formatos siguen la documentación de cada herramienta; no se contrastaron con una ejecución real** y los tests usan muestras armadas a mano.
 - Advisories y deltas de versión (`references/known-vulns-and-deltas.md`) siguen siendo una tarea manual del operador: BBA no consulta feeds.
 
+## Instalación, diagnóstico y MCP
+
+```powershell
+npm install
+npm run build
+npm pack
+npm install -g .ug-bounty-anything-0.8.0.tgz
+npx playwright-core install --only-shell chromium
+bba doctor
+```
+
+El paquete instalado es JavaScript compilado en `dist/` (Node no quita tipos de archivos dentro de `node_modules`) y expone el comando `bba`, equivalente a `npm run bba --`. Se verificó empaquetando e instalando el tarball en una carpeta aparte; el navegador se descarga aparte con el comando anterior.
+
+`bba doctor` hace solo comprobaciones locales y no contacta ningún host: versión de Node, SQLite, loopback, carpeta temporal, lanzamiento de Chromium con el aislamiento y los **nombres** (no los valores) de las variables `BBA_TOKEN_*` / `BBA_COOKIE_*` presentes. Sale con código 1 si falla algo.
+
+```powershell
+bba mcp --root C:utaalworkspace            # solo herramientas offline
+bba mcp --root C:utaalworkspace --allow-network
+```
+
+Servidor MCP por stdio (JSON-RPC, escrito sin dependencias: solo `initialize`, `ping` y `tools`). Expone `scope_check`, `import_surface`, `import_candidates`, `inspect_run`, `report_run`, `export_run` y `evaluate_run`. **`run`, `resume` y `capture`, que envían requests, solo existen con `--allow-network`.** Todos los paths se resuelven dentro de `--root` (los que salen se rechazan; no se siguen enlaces simbólicos, así que `--root` debe ser un workspace propio) y las salidas son siempre archivos nuevos. Las credenciales no viajan como argumentos: se leen del entorno del proceso servidor, igual que en la CLI. Los límites y el scope los define el `scope.json` que el operador preparó; un agente con permiso de escritura sobre el workspace podría editarlo, así que no le des `--allow-network` sin revisar quién escribe ahí.
+
 ## Qué demuestra
 
 | Solicitud | Vulnerable | Corregida |
@@ -150,4 +172,4 @@ Códigos de salida: `0` completo (en `lab`, incluso si encontró vulnerabilidade
 
 ## Próximo bloque
 
-Bloque 6: MCP y diagnóstico de instalación. El servicio productivo y la autorización concreta todavía no están seleccionados.
+Bloque 7: evaluación congelada con métricas y piloto en un programa con recompensa. El servicio productivo y la autorización concreta todavía no están seleccionados.

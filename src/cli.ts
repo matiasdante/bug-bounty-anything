@@ -8,8 +8,11 @@ import { importSurfaceFile, surfaceSummary } from './surface.ts';
 import { captureSurface } from './capture.ts';
 import { evaluateRunFile } from './checks.ts';
 import { candidateSummary, importCandidatesFile } from './candidates.ts';
+import { doctor } from './doctor.ts';
+import { serveMcp } from './mcp.ts';
+import { resolve } from 'node:path';
 
-const help = `BBA 0.7.0 — investigaciones, capturas y superficie
+const help = `BBA 0.8.0 — investigaciones, capturas y superficie
 
   npm run bba -- lab --variant vulnerable|fixed --out <new-directory>
   npm run bba -- inspect <directory>
@@ -23,6 +26,8 @@ const help = `BBA 0.7.0 — investigaciones, capturas y superficie
   npm run bba -- import-surface --format har|openapi|rea --input <file.json> --out <new-file.json>
   npm run bba -- evaluate-run <directory> --checks <checks.json> --out <new-file.json|.md>
   npm run bba -- import-candidates --format zap|nuclei|subfinder --input <file> --scope <scope.json> --out <new-file.json>
+  npm run bba -- doctor
+  npm run bba -- mcp --root <workspace-directory> [--allow-network]
   npm run bba -- capture --scope <scope.json> --plan <plan.json> --out <new-directory>
 
 lab crea su propio servidor. run/resume ejecutan GET con un alcance explícito.
@@ -47,7 +52,13 @@ async function main(args: string[]): Promise<void> {
   if (!command || (command === '--help' && !rest.length)) { console.log(help); return; }
   let action: () => Promise<void>;
   try {
-    if (command === 'capture') {
+    if (command === 'doctor' && !rest.length) {
+      action = async () => { const result = await doctor(); console.log(JSON.stringify(result, null, 2)); process.exitCode = result.ok ? 0 : 1; };
+    } else if (command === 'mcp') {
+      const allowNetwork = rest.includes('--allow-network');
+      const flags = options(rest.filter(a => a !== '--allow-network'), ['--root']);
+      action = () => serveMcp({ root: resolve(flags.get('--root')!), allowNetwork, input: process.stdin, output: process.stdout });
+    } else if (command === 'capture') {
       const flags = options(rest, ['--scope', '--plan', '--out']);
       action = async () => {
         const scope = readJson(flags.get('--scope')!); validateScope(scope);
