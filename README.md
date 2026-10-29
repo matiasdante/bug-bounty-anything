@@ -1,8 +1,8 @@
 # BBA — Bug Bounty Anything
 
-Framework local de investigación de vulnerabilidades con evidencia reproducible. **Versión implementada: 1.0.0-rc.1**: bloques 1 a 6 y la evaluación congelada del bloque 7 (el bloque 5 solo por importación de candidatos de ZAP, Nuclei y Subfinder) del [roadmap hacia 1.0.0](docs/ROADMAP.md). La metodología general está en [SKILL.md](SKILL.md).
+Framework local de investigación de vulnerabilidades con evidencia reproducible. **Versión implementada: 1.0.0**: bloques 1 a 6 y la evaluación congelada del bloque 7 (el bloque 5 solo por importación de candidatos de ZAP, Nuclei y Subfinder) del [roadmap hacia 1.0.0](docs/ROADMAP.md). La metodología general está en [SKILL.md](SKILL.md).
 
-Incluye un laboratorio HTTP para detectar lectura indebida entre cuentas y un núcleo de ejecución GET con alcance explícito, presupuesto persistente, cancelación y recuperación. El núcleo admite laboratorios locales y destinos HTTPS públicos autorizados. BBA no ejecuta scanners (solo importa su salida como candidatos sin validar) y la confirmación automática se limita a tres clases de autorización (BOLA, BFLA y exposición de propiedades). **Release candidate: todavía no se probó contra un programa real.**
+Incluye un laboratorio HTTP para detectar lectura indebida entre cuentas y un núcleo de ejecución GET con alcance explícito, presupuesto persistente, cancelación y recuperación. El núcleo admite laboratorios locales y destinos HTTPS públicos autorizados. BBA no ejecuta scanners (solo importa su salida como candidatos sin validar) y la confirmación automática se limita a tres clases de autorización (BOLA, BFLA y exposición de propiedades). **Piloto realizado sobre el sitio propio www.dcs.ar con autorización interna; todavía no se usó en un programa de bug bounty de terceros.**
 
 ## Requisitos y ejecución
 
@@ -190,4 +190,4 @@ Códigos de salida: `0` completo (en `lab`, incluso si encontró vulnerabilidade
 
 ## Próximo bloque
 
-Piloto en un programa con recompensa: falta elegir programa, scope y cuentas de prueba (ver docs/ROADMAP.md). El servicio productivo y la autorización concreta todavía no están seleccionados.
+Antes de un programa de terceros: header identificatorio configurable (muchos programas lo exigen) y conservar el destino saneado de los redirects. El servicio productivo y la autorización concreta todavía no están seleccionados.

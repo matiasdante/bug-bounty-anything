@@ -1,6 +1,6 @@
 # Roadmap interno — BBA 1.0.0
 
-Actualizado: 2026-10-29. La release actual es **1.0.0-rc.1**. Este documento conserva el alcance acordado y distingue implementación de planificación; no declara lista la 1.0.0.
+Actualizado: 2026-10-29. La release actual es **1.0.0**. Este documento conserva el alcance acordado y distingue implementación de planificación; no declara lista la 1.0.0.
 
 Objetivo: investigación reproducible de web/API, con skill, CLI/MCP, motor local, adaptadores, evidencia persistente, evaluación controlada y piloto sobre un programa con bug bounty. Distinguir detección automatizada, investigación asistida e indicios por capacidad. No prometer cobertura universal ni exigir un hallazgo productivo para declarar honesto el resultado.
 
@@ -12,7 +12,7 @@ Objetivo: investigación reproducible de web/API, con skill, CLI/MCP, motor loca
 | 4. Investigación y confirmación | Implementado en 0.6.0 para BOLA, BFLA y exposición de propiedades en laboratorio propio | Ampliar controles baseline/probe, roles y clases. Cada capacidad declarada debe distinguir sus casos vulnerables, corregidos e inconclusos. |
 | 5. Adaptadores | Implementado en 0.7.0 solo por importación (ZAP, Nuclei, Subfinder); BBA no ejecuta scanners ni consulta advisories | ZAP, Nuclei revisado/versionado y Subfinder; advisories y deltas. Normalizar resultados, respetar presupuestos y validar candidatos antes de confirmar. |
 | 6. Producto utilizable | Implementado en 0.8.0: CLI, recuperación, exportación, MCP por stdio, `doctor` y paquete instalable | Instalación comprobada desde el tarball; el MCP expone herramientas de red solo con `--allow-network`. |
-| 7. RC y piloto productivo | Evaluación congelada implementada en 0.9.0 (18 casos); piloto pendiente: falta programa, scope y cuentas autorizadas | Evaluación congelada, selección de programa, recorrido acotado, revisión de resultados y correcciones. |
+| 7. RC y piloto productivo | Implementado en 1.0.0: evaluación congelada (18 casos) y piloto sobre www.dcs.ar (ver abajo) | Evaluación congelada, selección de programa, recorrido acotado, revisión de resultados y correcciones. |
 
 ## Decisiones de implementación
 
@@ -40,6 +40,20 @@ Documentar una clase no significa implementarla. Las confirmaciones que requiera
 - Ningún adaptador productivo puede escapar a destinos y presupuestos autorizados. Si no es posible controlar sus efectos, limitarlo a laboratorio o importación.
 - El piloto conserva alcance, cobertura, limitaciones y evidencia. Encontrar un bug no es requisito para fingir éxito ni motivo para ampliar el scope.
 
-## Selección del piloto — más adelante
+## Piloto 1.0.0 — www.dcs.ar (2026-10-29)
 
-Relevar programas con recompensa vigente, scope claro, cuentas de prueba accesibles y reglas compatibles. Elegir un programa y una superficie acotada; registrar presupuesto y condiciones de parada antes de probar. El envío de un reporte requiere autorización explícita del usuario. No hay un target productivo seleccionado.
+Sitio propio de DCS, autorizado internamente por el operador; no es un programa de bug bounty de terceros. Alcance: solo GET anónimos a `https://www.dcs.ar`, sin login, formularios, POST, scanners, subdominios ni terceros. Evidencia en `runs/pilot-dcs/` (local, fuera de Git).
+
+| Paso | Requests de BBA | Resultado |
+|---|---|---|
+| `capture` de 6 páginas públicas | 6 enviadas, 366 bloqueadas en el navegador, 0 fugas | Todas 200; Cloudflare no desafió |
+| `run` exposición (1ª investigación) | 2 | `/wp-json/wp/v2/users` 401 (no lista usuarios); `/xmlrpc.php` 301 → detenida sin seguir |
+| `run` exposición (2ª, pasos restantes) | 3 | `/readme.html` 200 (readme estándar, sin versión de WP); `/wp-login.php` 200 (login público normal); `/wp-content/debug.log` 403 |
+
+Sin hallazgos confirmados. Observaciones informativas: la versión de WordPress figura en `meta generator`, y algunos assets de Elementor Pro se sirven con `?ver=3.7.5` mientras otros indican 3.25/3.26; es un **candidato** a plugin desactualizado que se confirma solo en el panel de administración.
+
+Lo que el piloto mostró de la herramienta: BBA no conserva el destino de un redirect (no se supo a dónde va `/xmlrpc.php`), no envía `User-Agent` ni un header identificatorio configurable, y `run` no guarda contenido, así que una exposición con 200 requiere revisión manual. La captura pública y el aislamiento funcionaron contra un host real detrás de Cloudflare.
+
+## Selección de un programa de terceros — más adelante
+
+Relevar programas con recompensa vigente, scope claro, cuentas de prueba accesibles y reglas compatibles. Elegir un programa y una superficie acotada; registrar presupuesto y condiciones de parada antes de probar. El envío de un reporte requiere autorización explícita del usuario.
