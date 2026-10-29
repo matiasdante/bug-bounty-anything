@@ -1,6 +1,6 @@
 # BBA — Bug Bounty Anything
 
-Framework local de investigación de vulnerabilidades con evidencia reproducible. **Versión implementada: 0.5.0**: bloques 1 y 2 y el bloque 3 completo (importación offline y captura con navegador) del [roadmap hacia 1.0.0](docs/ROADMAP.md). La metodología general está en [SKILL.md](SKILL.md).
+Framework local de investigación de vulnerabilidades con evidencia reproducible. **Versión implementada: 0.6.0**: bloques 1 a 3 y el bloque 4 (hipótesis baseline/probe para tres clases) del [roadmap hacia 1.0.0](docs/ROADMAP.md). La metodología general está en [SKILL.md](SKILL.md).
 
 Incluye un laboratorio HTTP para detectar lectura indebida entre cuentas y un núcleo de ejecución GET con alcance explícito, presupuesto persistente, cancelación y recuperación. El núcleo admite laboratorios locales y destinos HTTPS públicos autorizados; todavía no incorpora capturas externas, scanners ni confirmación automática de vulnerabilidades fuera del laboratorio.
 
@@ -75,6 +75,24 @@ Navega cada paso del plan con Chromium headless y produce `surface.json` (mismo 
 
 Códigos de salida: `0` sin detención, `1` detenida (presupuesto, 3xx/429/5xx, error), `130` cancelada.
 
+## Evaluar hipótesis de autorización
+
+```powershell
+npm run bba -- evaluate-run runs/investigation --checks checks.json --out runs/evaluation.md
+```
+
+Lee una sesión de `run` ya verificada y evalúa, offline, hipótesis declaradas en `checks.json` (`{ schemaVersion: 1, checks: [{ id, class, control, baseline, probe }] }`). Clases: `bola` (lectura de un objeto ajeno), `bfla` (función reservada a otro rol) y `property-exposure` (respuesta privilegiada entregada a un rol menor). `--out` termina en `.md` para el reporte o en `.json` para el resultado con checksum.
+
+Cada check apunta a tres pasos del plan y su estructura se valida en código: el **control** es anónimo, el **baseline** y la **sonda** usan credenciales distintas, y los tres leen la misma URL.
+
+| Resultado | Condición |
+|---|---|
+| `confirmed` | Control 401/403, baseline 200 y sonda 200 con el mismo SHA-256 que el baseline |
+| `not-reproduced` | Sonda 401/403/404 con baseline válido; en `property-exposure` también un 200 distinto del baseline (no se descarta una exposición parcial) |
+| `unresolved` | Control abierto, baseline fallido, paso sin respuesta, 5xx, o un 200 distinto en BOLA/BFLA |
+
+**Límites:** compara hashes de respuestas HTTP. No guarda contenido ni mide impacto o severidad, y los roles/dueños de las credenciales los declara el operador: BBA no los verifica. `not-reproduced` no significa seguro. Los laboratorios propios (`src/lab.ts`, `src/role-lab.ts`) tienen variante vulnerable y corregida para las tres clases; los tests ejercen ambas con HTTP real.
+
 ## Qué demuestra
 
 | Solicitud | Vulnerable | Corregida |
@@ -118,4 +136,4 @@ Códigos de salida: `0` completo (en `lab`, incluso si encontró vulnerabilidade
 
 ## Próximo bloque
 
-Bloque 4: ampliar clases y controles del laboratorio. El servicio productivo y la autorización concreta todavía no están seleccionados.
+Bloque 5: adaptadores de scanners por importación, advisories y deltas. El servicio productivo y la autorización concreta todavía no están seleccionados.

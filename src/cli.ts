@@ -6,8 +6,9 @@ import { readJson, createSession, inspectSession, exportSession, sessionSummary 
 import { executeSession } from './execution.ts';
 import { importSurfaceFile, surfaceSummary } from './surface.ts';
 import { captureSurface } from './capture.ts';
+import { evaluateRunFile } from './checks.ts';
 
-const help = `BBA 0.5.0 — investigaciones, capturas y superficie
+const help = `BBA 0.6.0 — investigaciones, capturas y superficie
 
   npm run bba -- lab --variant vulnerable|fixed --out <new-directory>
   npm run bba -- inspect <directory>
@@ -19,6 +20,7 @@ const help = `BBA 0.5.0 — investigaciones, capturas y superficie
   npm run bba -- export-run <directory> --out <new-file.json>
   npm run bba -- report-run <directory> --out <new-file.md>
   npm run bba -- import-surface --format har|openapi|rea --input <file.json> --out <new-file.json>
+  npm run bba -- evaluate-run <directory> --checks <checks.json> --out <new-file.json|.md>
   npm run bba -- capture --scope <scope.json> --plan <plan.json> --out <new-directory>
 
 lab crea su propio servidor. run/resume ejecutan GET con un alcance explícito.
@@ -86,6 +88,12 @@ async function main(args: string[]): Promise<void> {
       action = async () => {
         const scope = readJson(flags.get('--scope')!); validateScope(scope);
         await runCancellable(rest[0], scope);
+      };
+    } else if (command === 'evaluate-run' && rest[0] && !rest[0].startsWith('--')) {
+      const flags = options(rest.slice(1), ['--checks', '--out']);
+      action = async () => {
+        const { findings } = evaluateRunFile(rest[0], flags.get('--checks')!, flags.get('--out')!);
+        console.log(JSON.stringify(findings.map(f => ({ check: f.checkId, class: f.class, status: f.status })), null, 2));
       };
     } else if (command === 'inspect-run' && rest.length === 1 && !rest[0].startsWith('--')) {
       action = async () => { console.log(JSON.stringify(sessionSummary(inspectSession(rest[0])), null, 2)); };
