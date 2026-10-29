@@ -1,6 +1,6 @@
 # BBA — Bug Bounty Anything
 
-Framework local de investigación de vulnerabilidades con evidencia reproducible. **Versión implementada: 0.6.0**: bloques 1 a 3 y el bloque 4 (hipótesis baseline/probe para tres clases) del [roadmap hacia 1.0.0](docs/ROADMAP.md). La metodología general está en [SKILL.md](SKILL.md).
+Framework local de investigación de vulnerabilidades con evidencia reproducible. **Versión implementada: 0.7.0**: bloques 1 a 4 y el bloque 5 por importación (candidatos de ZAP, Nuclei y Subfinder) del [roadmap hacia 1.0.0](docs/ROADMAP.md). La metodología general está en [SKILL.md](SKILL.md).
 
 Incluye un laboratorio HTTP para detectar lectura indebida entre cuentas y un núcleo de ejecución GET con alcance explícito, presupuesto persistente, cancelación y recuperación. El núcleo admite laboratorios locales y destinos HTTPS públicos autorizados; todavía no incorpora capturas externas, scanners ni confirmación automática de vulnerabilidades fuera del laboratorio.
 
@@ -93,6 +93,20 @@ Cada check apunta a tres pasos del plan y su estructura se valida en código: el
 
 **Límites:** compara hashes de respuestas HTTP. No guarda contenido ni mide impacto o severidad, y los roles/dueños de las credenciales los declara el operador: BBA no los verifica. `not-reproduced` no significa seguro. Los laboratorios propios (`src/lab.ts`, `src/role-lab.ts`) tienen variante vulnerable y corregida para las tres clases; los tests ejercen ambas con HTTP real.
 
+## Importar candidatos de scanners
+
+```powershell
+npm run bba -- import-candidates --format zap|nuclei|subfinder --input zap-report.json --scope scope.json --out runs/candidates.json
+```
+
+BBA **no ejecuta** ZAP, Nuclei ni Subfinder: sus efectos activos no pasan por el transporte con scope y presupuesto de BBA, y el roadmap limita a importación los adaptadores que no se pueden controlar. El operador corre la herramienta por su cuenta, dentro del programa, y BBA normaliza su salida offline: ZAP en JSON (`site[].alerts[].instances[]`), Nuclei en JSONL (`-jsonl`) y Subfinder en JSONL (`-oJ`). Entrada máxima de 2 MiB y 5000 registros.
+
+- Cada candidato queda **siempre `unvalidated`**: un import no puede producir un hallazgo confirmado. Para confirmar, la clase tiene que estar soportada y pasar por `run` + `evaluate-run` con control, baseline y sonda.
+- `scopeStatus` compara origen y path exactos con el `scope.json` (las exclusiones ganan): `in-scope`, `excluded`, `out-of-scope` o `unparseable`. Para Subfinder se compara solo el hostname y nunca se resuelve ni se contacta. Un host con paths permitidos cuenta como `in-scope`; sus exclusiones por path se aplican a los endpoints.
+- Se descartan descripciones, evidencia, ataques, requests, responses y valores de query. Títulos y paths se limpian de caracteres de control, pero pueden seguir siendo sensibles. La severidad es la etiqueta del scanner, no una evaluación de BBA.
+- Duplicados (misma regla, método y path) se colapsan y se cuentan. **Los formatos siguen la documentación de cada herramienta; no se contrastaron con una ejecución real** y los tests usan muestras armadas a mano.
+- Advisories y deltas de versión (`references/known-vulns-and-deltas.md`) siguen siendo una tarea manual del operador: BBA no consulta feeds.
+
 ## Qué demuestra
 
 | Solicitud | Vulnerable | Corregida |
@@ -136,4 +150,4 @@ Códigos de salida: `0` completo (en `lab`, incluso si encontró vulnerabilidade
 
 ## Próximo bloque
 
-Bloque 5: adaptadores de scanners por importación, advisories y deltas. El servicio productivo y la autorización concreta todavía no están seleccionados.
+Bloque 6: MCP y diagnóstico de instalación. El servicio productivo y la autorización concreta todavía no están seleccionados.

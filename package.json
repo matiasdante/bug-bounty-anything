@@ -1,6 +1,6 @@
 {
   "name": "bug-bounty-anything",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "description": "Local, evidence-backed vulnerability investigation lab",

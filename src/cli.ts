@@ -7,8 +7,9 @@ import { executeSession } from './execution.ts';
 import { importSurfaceFile, surfaceSummary } from './surface.ts';
 import { captureSurface } from './capture.ts';
 import { evaluateRunFile } from './checks.ts';
+import { candidateSummary, importCandidatesFile } from './candidates.ts';
 
-const help = `BBA 0.6.0 — investigaciones, capturas y superficie
+const help = `BBA 0.7.0 — investigaciones, capturas y superficie
 
   npm run bba -- lab --variant vulnerable|fixed --out <new-directory>
   npm run bba -- inspect <directory>
@@ -21,6 +22,7 @@ const help = `BBA 0.6.0 — investigaciones, capturas y superficie
   npm run bba -- report-run <directory> --out <new-file.md>
   npm run bba -- import-surface --format har|openapi|rea --input <file.json> --out <new-file.json>
   npm run bba -- evaluate-run <directory> --checks <checks.json> --out <new-file.json|.md>
+  npm run bba -- import-candidates --format zap|nuclei|subfinder --input <file> --scope <scope.json> --out <new-file.json>
   npm run bba -- capture --scope <scope.json> --plan <plan.json> --out <new-directory>
 
 lab crea su propio servidor. run/resume ejecutan GET con un alcance explícito.
@@ -58,6 +60,14 @@ async function main(args: string[]): Promise<void> {
           console.log(JSON.stringify({ ...surfaceSummary(surface), stopReason: capture.stopReason, counts: capture.counts }, null, 2));
           process.exitCode = capture.stopReason === 'cancelled' ? 130 : capture.stopReason ? 1 : 0;
         } finally { process.off('SIGINT', cancel); process.off('SIGTERM', cancel); }
+      };
+    } else if (command === 'import-candidates') {
+      const flags = options(rest, ['--format', '--input', '--scope', '--out']);
+      const format = flags.get('--format');
+      if (format !== 'zap' && format !== 'nuclei' && format !== 'subfinder') throw new Error('Invalid format');
+      action = async () => {
+        const set = importCandidatesFile(flags.get('--input')!, format, readJson(flags.get('--scope')!), flags.get('--out')!);
+        console.log(JSON.stringify(candidateSummary(set), null, 2));
       };
     } else if (command === 'import-surface') {
       const flags = options(rest, ['--format', '--input', '--out']);
