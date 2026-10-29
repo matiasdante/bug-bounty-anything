@@ -1,6 +1,6 @@
 {
   "name": "bug-bounty-anything",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "description": "Local, evidence-backed vulnerability investigation lab",
@@ -11,5 +11,8 @@
     "bba": "node src/cli.ts",
     "demo:core": "node src/demo-core.ts",
     "test": "node --test test/*.test.ts"
+  },
+  "dependencies": {
+    "playwright-core": "1.64.1"
   }
 }

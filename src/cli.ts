@@ -5,8 +5,9 @@ import { validateScope, validatePlan } from './scope.ts';
 import { readJson, createSession, inspectSession, exportSession, sessionSummary } from './session.ts';
 import { executeSession } from './execution.ts';
 import { importSurfaceFile, surfaceSummary } from './surface.ts';
+import { captureSurface } from './capture.ts';
 
-const help = `BBA 0.3.0 — investigaciones, capturas y superficie
+const help = `BBA 0.4.0 — investigaciones, capturas y superficie
 
   npm run bba -- lab --variant vulnerable|fixed --out <new-directory>
   npm run bba -- inspect <directory>
@@ -18,8 +19,10 @@ const help = `BBA 0.3.0 — investigaciones, capturas y superficie
   npm run bba -- export-run <directory> --out <new-file.json>
   npm run bba -- report-run <directory> --out <new-file.md>
   npm run bba -- import-surface --format har|openapi|rea --input <file.json> --out <new-file.json>
+  npm run bba -- capture --scope <loopback-scope.json> --plan <plan.json> --out <new-directory>
 
 lab crea su propio servidor. run/resume ejecutan GET con un alcance explícito.
+capture navega el plan con Chromium headless; solo envía GET exactos en scope.
 Los otros comandos son offline. Ctrl+C pausa una ejecución con checkpoints.
 Exit codes: 0 completo, 1 error/detenido, 2 uso inválido, 3 parcial, 130 cancelado.
 `;
@@ -40,7 +43,21 @@ async function main(args: string[]): Promise<void> {
   if (!command || (command === '--help' && !rest.length)) { console.log(help); return; }
   let action: () => Promise<void>;
   try {
-    if (command === 'import-surface') {
+    if (command === 'capture') {
+      const flags = options(rest, ['--scope', '--plan', '--out']);
+      action = async () => {
+        const scope = readJson(flags.get('--scope')!); validateScope(scope);
+        const plan = readJson(flags.get('--plan')!); validatePlan(plan, scope);
+        const controller = new AbortController();
+        const cancel = () => controller.abort();
+        process.on('SIGINT', cancel); process.on('SIGTERM', cancel);
+        try {
+          const { capture, surface } = await captureSurface(flags.get('--out')!, scope, plan, { signal: controller.signal });
+          console.log(JSON.stringify({ ...surfaceSummary(surface), stopReason: capture.stopReason, counts: capture.counts }, null, 2));
+          process.exitCode = capture.stopReason === 'cancelled' ? 130 : capture.stopReason ? 1 : 0;
+        } finally { process.off('SIGINT', cancel); process.off('SIGTERM', cancel); }
+      };
+    } else if (command === 'import-surface') {
       const flags = options(rest, ['--format', '--input', '--out']);
       const format = flags.get('--format');
       if (format !== 'har' && format !== 'openapi' && format !== 'rea') throw new Error('Invalid format');

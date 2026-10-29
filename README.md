@@ -1,13 +1,13 @@
 # BBA — Bug Bounty Anything
 
-Framework local de investigación de vulnerabilidades con evidencia reproducible. **Versión implementada: 0.3.0**: bloques 1 y 2 y la importación offline del bloque 3 del [roadmap hacia 1.0.0](docs/ROADMAP.md). La metodología general está en [SKILL.md](SKILL.md).
+Framework local de investigación de vulnerabilidades con evidencia reproducible. **Versión implementada: 0.4.0**: bloques 1 y 2, la importación offline y la captura con navegador en laboratorio del bloque 3 del [roadmap hacia 1.0.0](docs/ROADMAP.md). La metodología general está en [SKILL.md](SKILL.md).
 
 Incluye un laboratorio HTTP para detectar lectura indebida entre cuentas y un núcleo de ejecución GET con alcance explícito, presupuesto persistente, cancelación y recuperación. El núcleo admite laboratorios locales y destinos HTTPS públicos autorizados; todavía no incorpora capturas externas, scanners ni confirmación automática de vulnerabilidades fuera del laboratorio.
 
 ## Requisitos y ejecución
 
 - Node.js **26 o posterior**, con npm. Se probó con Node 26.12.0 en Windows.
-- TypeScript y SQLite provistos por Node; no hay dependencias de terceros ni hace falta `npm install`.
+- TypeScript y SQLite provistos por Node. Única dependencia: `playwright-core` 1.64.1 (Apache-2.0), solo para `capture`. Para usarlo: `npm install` y `npx playwright-core install --only-shell chromium` (descarga el navegador a `%LOCALAPPDATA%\ms-playwright`, fuera del repo). Sin navegador, los tests de captura se marcan como salteados con el motivo.
 - El sistema debe permitir conexiones a `127.0.0.1`. Algunos sandboxes bloquean incluso loopback; en ese caso ejecutá los comandos desde una terminal local habilitada. No desactives controles del sistema ni cambies los destinos para sortear el bloqueo.
 
 Desde la raíz del proyecto:
@@ -59,6 +59,21 @@ Proyecta un inventario de endpoints desde un HAR 1.2, un OpenAPI 3.0/3.1 en JSON
 - `credential-present` solo indica que la captura tenía `Authorization`/`Cookie`; no prueba sesión, rol ni tenant válidos.
 - Se rechaza todo el archivo ante rutas ambiguas o con escapes, credenciales en la URL, refs externas o cíclicas, variables de server, YAML o Swagger 2, y nombres de parámetro fuera de `[A-Za-z0-9_.-]` (por ejemplo `filter[a]`).
 
+## Capturar superficie con navegador
+
+```powershell
+npm run bba -- capture --scope scope.json --plan plan.json --out runs/capture
+```
+
+Navega cada paso del plan con Chromium headless y produce `surface.json` (mismo formato que `import-surface`) y `capture.json` (conteos, motivo de detención y resultado de cada entrada). **Solo admite scopes `loopback-lab`**: el navegador resuelve DNS por su cuenta y BBA no puede fijar direcciones públicas validadas. HTTPS público requiere un proxy propio, todavía no implementado.
+
+- Cada request del navegador pasa por BBA. Solo se envían GET a origen y path exactos en scope, mediante el mismo transporte de `run`: sin redirects, con timeout, tamaño máximo, intervalo y presupuesto. El resto se aborta sin salir (`blocked`). Después de una detención, nada más se envía (`not-sent`).
+- Se envía solamente el Bearer del paso (`credentialEnv`). No se reenvían cookies ni headers del navegador, y cada paso usa un contexto efímero propio. Los service workers se bloquean y los WebSocket se interceptan sin conexión (`websocket-blocked`).
+- En `surface.json`, `status: null` significa que BBA no envió la request; `capture.json.outcomes` está alineado con sus entradas. Las URLs no proyectables (por ejemplo con escapes) solo se cuentan.
+- No hay checkpoints: si el proceso muere, la captura se pierde y las requests ya enviadas no quedan registradas. Fuera de alcance: login por formulario, cookies, POST, crawling.
+
+Códigos de salida: `0` sin detención, `1` detenida (presupuesto, 3xx/429/5xx, error), `130` cancelada.
+
 ## Qué demuestra
 
 | Solicitud | Vulnerable | Corregida |
@@ -102,4 +117,4 @@ Códigos de salida: `0` completo (en `lab`, incluso si encontró vulnerabilidade
 
 ## Próximo bloque
 
-Completar captura y superficie: navegación autenticada con Playwright y separación de inferencias sobre el inventario importado. El servicio productivo y la autorización concreta todavía no están seleccionados.
+Completar captura y superficie: proxy de BBA para capturar HTTPS público, login por formulario/cookies y separación de inferencias sobre el inventario. El servicio productivo y la autorización concreta todavía no están seleccionados.
