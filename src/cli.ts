@@ -9,10 +9,11 @@ import { captureSurface } from './capture.ts';
 import { evaluateRunFile } from './checks.ts';
 import { candidateSummary, importCandidatesFile } from './candidates.ts';
 import { doctor } from './doctor.ts';
+import { evaluationFile } from './evaluation.ts';
 import { serveMcp } from './mcp.ts';
 import { resolve } from 'node:path';
 
-const help = `BBA 0.8.0 — investigaciones, capturas y superficie
+const help = `BBA 0.9.0 — investigaciones, capturas y superficie
 
   npm run bba -- lab --variant vulnerable|fixed --out <new-directory>
   npm run bba -- inspect <directory>
@@ -27,6 +28,7 @@ const help = `BBA 0.8.0 — investigaciones, capturas y superficie
   npm run bba -- evaluate-run <directory> --checks <checks.json> --out <new-file.json|.md>
   npm run bba -- import-candidates --format zap|nuclei|subfinder --input <file> --scope <scope.json> --out <new-file.json>
   npm run bba -- doctor
+  npm run bba -- eval --out <new-file.json|.md>
   npm run bba -- mcp --root <workspace-directory> [--allow-network]
   npm run bba -- capture --scope <scope.json> --plan <plan.json> --out <new-directory>
 
@@ -54,6 +56,13 @@ async function main(args: string[]): Promise<void> {
   try {
     if (command === 'doctor' && !rest.length) {
       action = async () => { const result = await doctor(); console.log(JSON.stringify(result, null, 2)); process.exitCode = result.ok ? 0 : 1; };
+    } else if (command === 'eval') {
+      const flags = options(rest, ['--out']);
+      action = async () => {
+        const { metrics } = await evaluationFile(flags.get('--out')!);
+        console.log(JSON.stringify(metrics, null, 2));
+        process.exitCode = metrics.passed === metrics.cases ? 0 : 1;
+      };
     } else if (command === 'mcp') {
       const allowNetwork = rest.includes('--allow-network');
       const flags = options(rest.filter(a => a !== '--allow-network'), ['--root']);

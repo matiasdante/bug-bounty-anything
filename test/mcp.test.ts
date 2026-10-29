@@ -128,7 +128,8 @@ test('the built package runs without type stripping', async () => {
     assert.match((await readFile(built, 'utf8')).split('\n')[0], /^#!\/usr\/bin\/env node/);
     assert.doesNotMatch(await readFile(built, 'utf8'), /from '\.\/[\w-]+\.ts'/);
     const help = await promisify(execFile)(process.execPath, ['--no-experimental-strip-types', built, '--help']);
-    assert.match(help.stdout, /BBA 0\.8\.0/);
+    const { version } = JSON.parse(await readFile(join(project, 'package.json'), 'utf8'));
+    assert.ok(help.stdout.startsWith('BBA ' + version + ' '), help.stdout.slice(0, 40));
     const dir = await mkdtemp(join(tmpdir(), 'bba-built-'));
     try {
       await writeFile(join(dir, 'c.har'), JSON.stringify(har));

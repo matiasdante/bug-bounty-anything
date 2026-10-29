@@ -1,6 +1,6 @@
 # BBA — Bug Bounty Anything
 
-Framework local de investigación de vulnerabilidades con evidencia reproducible. **Versión implementada: 0.8.0**: bloques 1 a 6 (el bloque 5 solo por importación de candidatos de ZAP, Nuclei y Subfinder) del [roadmap hacia 1.0.0](docs/ROADMAP.md). La metodología general está en [SKILL.md](SKILL.md).
+Framework local de investigación de vulnerabilidades con evidencia reproducible. **Versión implementada: 0.9.0**: bloques 1 a 6 y la evaluación congelada del bloque 7 (el bloque 5 solo por importación de candidatos de ZAP, Nuclei y Subfinder) del [roadmap hacia 1.0.0](docs/ROADMAP.md). La metodología general está en [SKILL.md](SKILL.md).
 
 Incluye un laboratorio HTTP para detectar lectura indebida entre cuentas y un núcleo de ejecución GET con alcance explícito, presupuesto persistente, cancelación y recuperación. El núcleo admite laboratorios locales y destinos HTTPS públicos autorizados; todavía no incorpora capturas externas, scanners ni confirmación automática de vulnerabilidades fuera del laboratorio.
 
@@ -107,6 +107,24 @@ BBA **no ejecuta** ZAP, Nuclei ni Subfinder: sus efectos activos no pasan por el
 - Duplicados (misma regla, método y path) se colapsan y se cuentan. **Los formatos siguen la documentación de cada herramienta; no se contrastaron con una ejecución real** y los tests usan muestras armadas a mano.
 - Advisories y deltas de versión (`references/known-vulns-and-deltas.md`) siguen siendo una tarea manual del operador: BBA no consulta feeds.
 
+## Evaluación congelada
+
+```powershell
+npm run bba -- eval --out runs/evaluation.md
+```
+
+Corre 18 casos obligatorios contra los laboratorios propios, todos en loopback, y sale con código 1 si alguno no da lo esperado:
+
+- **Detección** (6): BOLA, BFLA y exposición de propiedades, cada una en variante vulnerable (debe dar `confirmed`) y corregida (`not-reproduced`).
+- **Inconclusos** (3): la misma hipótesis con el presupuesto agotado antes de la sonda debe quedar `unresolved`.
+- **Alcance** (6): otro origen, ruta excluida, autorización vencida, dirección privada en modo público, redirect sin seguir y presupuesto, siempre contando lo que el servidor realmente recibió.
+- **Secretos** (2): ni un Bearer ni una cookie aparecen en bytes de la sesión, la exportación JSON o el reporte.
+- **Recuperación** (1): tras cancelar a mitad y retomar, ninguna solicitud se repite.
+
+El conjunto está congelado por un digest de ids, grupos y resultados esperados (`FROZEN_DIGEST` en `src/evaluation.ts`): cambiar un caso sin actualizarlo hace fallar la corrida. Se comprobó con mutaciones que la evaluación falla si se rompe el stop por redirect, el presupuesto o se planta un secreto. Última corrida: 18/18, 3 detecciones, 0 omisiones, 0 falsos positivos, 33 solicitudes.
+
+**Estas métricas no se extrapolan:** salen de tres clases en laboratorios propios con datos sintéticos. No estiman tasas de detección ni falsos positivos en sistemas reales, y que pasen no demuestra que un objetivo sea seguro. El aislamiento del navegador se cubre en los tests de captura, que requieren Chromium.
+
 ## Instalación, diagnóstico y MCP
 
 ```powershell
@@ -172,4 +190,4 @@ Códigos de salida: `0` completo (en `lab`, incluso si encontró vulnerabilidade
 
 ## Próximo bloque
 
-Bloque 7: evaluación congelada con métricas y piloto en un programa con recompensa. El servicio productivo y la autorización concreta todavía no están seleccionados.
+Piloto en un programa con recompensa: falta elegir programa, scope y cuentas de prueba (ver docs/ROADMAP.md). El servicio productivo y la autorización concreta todavía no están seleccionados.

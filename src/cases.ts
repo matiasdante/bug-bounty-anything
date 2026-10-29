@@ -23,9 +23,9 @@ async function prepare(kind: LabClass, variant: Variant) {
     tokens: { BBA_TOKEN_ADMIN: lab.credentials.admin, BBA_TOKEN_USER: lab.credentials.user } };
 }
 
-// One control/baseline/probe triple per class against the owned labs. Each case
-// spends exactly three requests and never leaves 127.0.0.1.
-export async function runLabCase(kind: LabClass, variant: Variant): Promise<Evaluation> {
+// One control/baseline/probe triple per class against the owned labs. A case spends
+// at most three requests (fewer when the budget is lowered) and never leaves 127.0.0.1.
+export async function runLabCase(kind: LabClass, variant: Variant, maxRequests = 3): Promise<Evaluation> {
   const { lab, path, baselineEnv, probeEnv, tokens } = await prepare(kind, variant);
   const dir = await mkdtemp(join(tmpdir(), 'bba-case-'));
   try {
@@ -34,7 +34,7 @@ export async function runLabCase(kind: LabClass, variant: Variant): Promise<Eval
       schemaVersion: 1, mode: 'loopback-lab',
       authorization: { reference: 'BBA-owned evaluation lab', validFrom: new Date(Date.now() - 1000).toISOString(), validUntil: new Date(Date.now() + 600000).toISOString() },
       allowed: [{ origin: lab.origin, paths: [path] }], excluded: [],
-      limits: { maxRequests: 3, minIntervalMs: 0, timeoutMs: 2000, maxResponseBytes: 4096, maxDurationMs: 60000 },
+      limits: { maxRequests, minIntervalMs: 0, timeoutMs: 2000, maxResponseBytes: 4096, maxDurationMs: 60000 },
     };
     const plan: Plan = { schemaVersion: 1, steps: [
       { id: 'control', method: 'GET', url, credentialEnv: null },

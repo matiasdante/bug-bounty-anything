@@ -26,7 +26,7 @@ export function serveMcp(options: { root: string; allowNetwork: boolean; input: 
     if (method === 'initialize') {
       const requested = params?.protocolVersion;
       return send({ jsonrpc: '2.0', id, result: { protocolVersion: versions.includes(requested) ? requested : versions.at(-1),
-        capabilities: { tools: {} }, serverInfo: { name: 'bba', version: '0.8.0' } } });
+        capabilities: { tools: {} }, serverInfo: { name: 'bba', version: '0.9.0' } } });
     }
     if (method === 'ping') return send({ jsonrpc: '2.0', id, result: {} });
     if (method === 'tools/list') {
