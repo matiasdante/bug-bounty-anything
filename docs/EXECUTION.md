@@ -21,7 +21,7 @@ El contrato se valida en [src/scope.ts](../src/scope.ts). `scope-check` es offli
 
 Las URLs deben ser canónicas. No se admiten query strings, fragmentos, credenciales embebidas, escapes porcentuales, segmentos normalizados ni rutas ambiguas. No pongas secretos ni datos personales en referencias, IDs o paths: esos campos se conservan como metadatos. El scope completo queda congelado por digest; incluso ampliar su vigencia requiere una investigación nueva.
 
-El contrato deliberadamente cubre un subconjunto: GET, paths exactos, Bearer opcional. Cookies, POST, cuerpos, formularios, navegación autenticada y otros protocolos se incorporan con los bloques correspondientes. La existencia de un GET no garantiza que sea libre de efectos; cada paso debe estar autorizado y revisado.
+El contrato deliberadamente cubre un subconjunto: GET, paths exactos, Bearer o Cookie opcional. POST, cuerpos, formularios, navegación autenticada y otros protocolos se incorporan con los bloques correspondientes. La existencia de un GET no garantiza que sea libre de efectos; cada paso debe estar autorizado y revisado.
 
 ## Preparar un plan
 
@@ -38,7 +38,7 @@ El contrato deliberadamente cubre un subconjunto: GET, paths exactos, Bearer opc
 
 Es un ejemplo de estructura, no un target a ejecutar. Para una demo real autoconfigurada, usá `npm run demo:core -- --out runs/core-demo`.
 
-`credentialEnv` puede ser `null` para acceso anónimo o el nombre de una variable `BBA_TOKEN_*`. El operador proporciona el valor por su entorno; BBA no lo incluye en argumentos, resultados, logs ni base de evidencia. Variables faltantes o formato inválido fallan antes de reservar solicitudes. Los valores no se guardan para reanudaciones: deben seguir disponibles en el entorno correspondiente.
+`credentialEnv` puede ser `null` para acceso anónimo o el nombre de una variable `BBA_TOKEN_*` (se envía como Bearer) o `BBA_COOKIE_*` (se envía como header `Cookie`, formato `nombre=valor; nombre2=valor2`). El operador proporciona el valor por su entorno; BBA no lo incluye en argumentos, resultados, logs ni base de evidencia. Variables faltantes o formato inválido fallan antes de reservar solicitudes. Los valores no se guardan para reanudaciones: deben seguir disponibles en el entorno correspondiente.
 
 ## Ejecución y red
 

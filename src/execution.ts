@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { digest } from './contracts.ts';
-import { scopedRequest, RequestFailure } from './http.ts';
+import { scopedRequest, RequestFailure, credentialFor } from './http.ts';
 import { validateScope, assertAuthorized } from './scope.ts';
 import type { Scope } from './scope.ts';
 import { withSession } from './session.ts';
@@ -23,7 +23,7 @@ export async function executeSession(folder: string, scope: Scope, options: {
       if (step.credentialEnv) {
         const token = (options.credentials ?? process.env)[step.credentialEnv];
         if (!token) throw new Error('Missing credential environment variable');
-        if (!/^[A-Za-z0-9._~+/-]{1,4096}={0,2}$/.test(token)) throw new Error('Invalid credential format');
+        credentialFor(step.credentialEnv, token); // Validates the format; the value stays in memory only.
         tokens.set(step.id, token);
       }
     }
@@ -54,7 +54,7 @@ export async function executeSession(folder: string, scope: Scope, options: {
       checkpoint(state); // Durable intent before send: a crash never refunds it.
       try {
         const response = await scopedRequest(scope, step.url, {
-          token: tokens.get(step.id), signal: options.signal, remainingMs: deadline - Date.now(),
+          ...(step.credentialEnv ? credentialFor(step.credentialEnv, tokens.get(step.id)!) : {}), signal: options.signal, remainingMs: deadline - Date.now(),
         });
         attempt.response = { status: response.status, bytes: response.body.length,
           sha256: createHash('sha256').update(response.body).digest('hex') };

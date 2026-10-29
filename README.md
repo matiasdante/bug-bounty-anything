@@ -1,6 +1,6 @@
 # BBA — Bug Bounty Anything
 
-Framework local de investigación de vulnerabilidades con evidencia reproducible. **Versión implementada: 0.4.0**: bloques 1 y 2, la importación offline y la captura con navegador en laboratorio del bloque 3 del [roadmap hacia 1.0.0](docs/ROADMAP.md). La metodología general está en [SKILL.md](SKILL.md).
+Framework local de investigación de vulnerabilidades con evidencia reproducible. **Versión implementada: 0.5.0**: bloques 1 y 2 y el bloque 3 completo (importación offline y captura con navegador) del [roadmap hacia 1.0.0](docs/ROADMAP.md). La metodología general está en [SKILL.md](SKILL.md).
 
 Incluye un laboratorio HTTP para detectar lectura indebida entre cuentas y un núcleo de ejecución GET con alcance explícito, presupuesto persistente, cancelación y recuperación. El núcleo admite laboratorios locales y destinos HTTPS públicos autorizados; todavía no incorpora capturas externas, scanners ni confirmación automática de vulnerabilidades fuera del laboratorio.
 
@@ -65,12 +65,13 @@ Proyecta un inventario de endpoints desde un HAR 1.2, un OpenAPI 3.0/3.1 en JSON
 npm run bba -- capture --scope scope.json --plan plan.json --out runs/capture
 ```
 
-Navega cada paso del plan con Chromium headless y produce `surface.json` (mismo formato que `import-surface`) y `capture.json` (conteos, motivo de detención y resultado de cada entrada). **Solo admite scopes `loopback-lab`**: el navegador resuelve DNS por su cuenta y BBA no puede fijar direcciones públicas validadas. HTTPS público requiere un proxy propio, todavía no implementado.
+Navega cada paso del plan con Chromium headless y produce `surface.json` (mismo formato que `import-surface`) y `capture.json` (conteos, motivo de detención y resultado de cada entrada). Admite scopes `loopback-lab` y `public-https`. **La captura pública todavía no se probó contra un host real**: se verificó con servidores locales y el resolver controlado, sin contactar servicios productivos.
 
-- Cada request del navegador pasa por BBA. Solo se envían GET a origen y path exactos en scope, mediante el mismo transporte de `run`: sin redirects, con timeout, tamaño máximo, intervalo y presupuesto. El resto se aborta sin salir (`blocked`). Después de una detención, nada más se envía (`not-sent`).
-- Se envía solamente el Bearer del paso (`credentialEnv`). No se reenvían cookies ni headers del navegador, y cada paso usa un contexto efímero propio. Los service workers se bloquean y los WebSocket se interceptan sin conexión (`websocket-blocked`).
+- Cada request del navegador pasa por BBA. Solo se envían GET a origen y path exactos en scope, mediante el mismo transporte de `run` (DNS fijado, IP pública validada, sin redirects, con timeout, tamaño máximo, intervalo y presupuesto). El resto se aborta sin salir (`blocked`). Tras una detención, nada más se envía (`not-sent`).
+- **Aislamiento del navegador:** lo que Chromium abriría por su cuenta queda fuera de la ruta de BBA, así que se fuerza a un proxy sumidero en loopback que rechaza y cuenta (`leak-attempts`), se deshabilita la resolución de nombres y WebRTC no puede usar UDP fuera del proxy. Cada capa se verificó con un test que falla si se la quita: un fetch sin enrutar llega al sumidero y no al otro origen; sin la política, WebRTC emitió 4 paquetes STUN. `preconnect` y `dns-prefetch` no abrieron conexiones en el Chromium fijado, así que no son un vector probado.
+- Credenciales: `credentialEnv` acepta `BBA_TOKEN_*` (se envía como `Authorization: Bearer`) o `BBA_COOKIE_*` (se envía como `Cookie`, formato `nombre=valor; nombre2=valor2`, sin saltos de línea ni valores vacíos de nombre). Nunca se envían ambas ni se persiste el valor. El operador inicia sesión por su cuenta y exporta la cookie; BBA no automatiza logins ni aplica `Set-Cookie`, así que una sesión que rota puede quedar sin autenticar. Cada paso usa un contexto efímero propio y los service workers están bloqueados.
 - En `surface.json`, `status: null` significa que BBA no envió la request; `capture.json.outcomes` está alineado con sus entradas. Las URLs no proyectables (por ejemplo con escapes) solo se cuentan.
-- No hay checkpoints: si el proceso muere, la captura se pierde y las requests ya enviadas no quedan registradas. Fuera de alcance: login por formulario, cookies, POST, crawling.
+- No hay checkpoints: si el proceso muere, la captura se pierde y las requests ya enviadas no quedan registradas. Fuera de alcance: login por formulario, POST, crawling.
 
 Códigos de salida: `0` sin detención, `1` detenida (presupuesto, 3xx/429/5xx, error), `130` cancelada.
 
@@ -117,4 +118,4 @@ Códigos de salida: `0` completo (en `lab`, incluso si encontró vulnerabilidade
 
 ## Próximo bloque
 
-Completar captura y superficie: proxy de BBA para capturar HTTPS público, login por formulario/cookies y separación de inferencias sobre el inventario. El servicio productivo y la autorización concreta todavía no están seleccionados.
+Bloque 4: ampliar clases y controles del laboratorio. El servicio productivo y la autorización concreta todavía no están seleccionados.

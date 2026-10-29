@@ -43,14 +43,26 @@ export async function destination(url: URL, scope: Scope, resolver = lookup): Pr
   return addresses[0];
 }
 
+// Operator-supplied secrets enter only through BBA_TOKEN_* (Bearer) or BBA_COOKIE_* (Cookie header).
+export function credentialFor(envName: string, value: string): { token?: string; cookie?: string } {
+  if (envName.startsWith('BBA_COOKIE_')) {
+    if (!/^[A-Za-z0-9_.-]{1,64}=[A-Za-z0-9._~+/%=-]{0,2048}(; [A-Za-z0-9_.-]{1,64}=[A-Za-z0-9._~+/%=-]{0,2048}){0,19}$/.test(value)) throw new Error('Invalid credential format');
+    return { cookie: value };
+  }
+  if (!/^[A-Za-z0-9._~+/-]{1,4096}={0,2}$/.test(value)) throw new Error('Invalid credential format');
+  return { token: value };
+}
+
 export type HttpResult = { status: number; body: Buffer; contentType: string };
 
 export async function scopedRequest(scope: Scope, urlText: string, options: {
-  token?: string; signal?: AbortSignal; remainingMs?: number;
+  token?: string; cookie?: string; signal?: AbortSignal; remainingMs?: number;
 } = {}): Promise<HttpResult> {
   validateScope(scope);
   const url = assertAuthorized(scope, urlText);
+  if (options.token !== undefined && options.cookie !== undefined) throw new RequestFailure('invalid-credential');
   if (options.token !== undefined && !/^[A-Za-z0-9._~+/-]{1,4096}={0,2}$/.test(options.token)) throw new RequestFailure('invalid-credential');
+  if (options.cookie !== undefined) try { credentialFor('BBA_COOKIE_X', options.cookie); } catch { throw new RequestFailure('invalid-credential'); }
   const timeout = Math.min(scope.limits.timeoutMs, options.remainingMs ?? Infinity,
     Date.parse(scope.authorization.validUntil) - Date.now());
   if (timeout <= 0) throw new RequestFailure('deadline');
@@ -78,7 +90,7 @@ export async function scopedRequest(scope: Scope, urlText: string, options: {
           if (_options.all) callback(null, [target]);
           else callback(null, target.address, target.family);
         },
-        headers: options.token ? { Authorization: `Bearer ${options.token}` } : {},
+        headers: options.cookie ? { Cookie: options.cookie } : options.token ? { Authorization: `Bearer ${options.token}` } : {},
       }, res => {
         const status = res.statusCode ?? 0;
         if ((status >= 300 && status < 400) || status === 429 || status >= 500) {

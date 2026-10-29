@@ -7,7 +7,7 @@ import { executeSession } from './execution.ts';
 import { importSurfaceFile, surfaceSummary } from './surface.ts';
 import { captureSurface } from './capture.ts';
 
-const help = `BBA 0.4.0 — investigaciones, capturas y superficie
+const help = `BBA 0.5.0 — investigaciones, capturas y superficie
 
   npm run bba -- lab --variant vulnerable|fixed --out <new-directory>
   npm run bba -- inspect <directory>
@@ -19,7 +19,7 @@ const help = `BBA 0.4.0 — investigaciones, capturas y superficie
   npm run bba -- export-run <directory> --out <new-file.json>
   npm run bba -- report-run <directory> --out <new-file.md>
   npm run bba -- import-surface --format har|openapi|rea --input <file.json> --out <new-file.json>
-  npm run bba -- capture --scope <loopback-scope.json> --plan <plan.json> --out <new-directory>
+  npm run bba -- capture --scope <scope.json> --plan <plan.json> --out <new-directory>
 
 lab crea su propio servidor. run/resume ejecutan GET con un alcance explícito.
 capture navega el plan con Chromium headless; solo envía GET exactos en scope.

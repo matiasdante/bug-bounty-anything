@@ -85,7 +85,7 @@ export function validatePlan(value: unknown, scope: Scope, checkTime = true): as
     if (typeof step.id !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(step.id) || ids.has(step.id)) throw new Error('Invalid step ID');
     ids.add(step.id);
     if (step.method !== 'GET') throw new Error('Only GET is supported');
-    if (step.credentialEnv !== null && (typeof step.credentialEnv !== 'string' || !/^BBA_TOKEN_[A-Z0-9_]{1,50}$/.test(step.credentialEnv))) throw new Error('Invalid credential reference');
+    if (step.credentialEnv !== null && (typeof step.credentialEnv !== 'string' || !/^BBA_(TOKEN|COOKIE)_[A-Z0-9_]{1,50}$/.test(step.credentialEnv))) throw new Error('Invalid credential reference');
     assertAuthorized(scope, step.url, checkTime ? Date.now() : Date.parse(scope.authorization.validFrom));
   }
 }

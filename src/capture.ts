@@ -1,10 +1,12 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
+import type { AddressInfo } from 'node:net';
 import { dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { chromium } from 'playwright-core';
 import type { Route } from 'playwright-core';
 import { digest } from './contracts.ts';
-import { scopedRequest, RequestFailure } from './http.ts';
+import { scopedRequest, RequestFailure, credentialFor } from './http.ts';
 import { assertAuthorized, validatePlan, validateScope } from './scope.ts';
 import type { Plan, Scope } from './scope.ts';
 import { requireNewDirectory } from './storage.ts';
@@ -13,12 +15,30 @@ import type { Surface } from './surface.ts';
 
 type Outcome = 'sent' | 'blocked' | 'not-sent' | 'failed';
 export type Capture = {
-  schemaVersion: 1; toolVersion: '0.4.0'; scopeDigest: string; planDigest: string;
+  schemaVersion: 1; toolVersion: '0.5.0'; scopeDigest: string; planDigest: string;
   startedAt: string; endedAt: string; stopReason: string | null;
-  counts: Record<Outcome | 'unrepresentable' | 'websocket-blocked', number>;
+  counts: Record<Outcome | 'unrepresentable' | 'websocket-blocked' | 'leak-attempts', number>;
   // Aligned with surface.entries; requests whose URL cannot be projected are only counted.
   outcomes: Outcome[];
 };
+
+// Routed requests are sent by BBA, but Chromium can also open connections by itself
+// (unrouted loads, WebRTC). TCP is forced into a loopback sink that refuses and counts
+// it, name resolution is disabled and WebRTC may not use UDP outside the proxy.
+// Preconnect and dns-prefetch hints did not connect in the pinned build, so they are not a tested vector.
+export async function launchIsolated() {
+  let leaks = 0;
+  const sink = createServer(socket => { leaks++; socket.destroy(); });
+  await new Promise<void>((resolve, reject) => { sink.once('error', reject); sink.listen(0, '127.0.0.1', resolve); });
+  try {
+    const browser = await chromium.launch({
+      headless: true,
+      proxy: { server: `http://127.0.0.1:${(sink.address() as AddressInfo).port}`, bypass: '<-loopback>' },
+      args: ['--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp'],
+    });
+    return { browser, leaks: () => leaks, close: async () => { await browser.close(); sink.close(); } };
+  } catch { sink.close(); throw new Error('Browser unavailable; run npx playwright-core install --only-shell chromium'); }
+}
 
 const har = (entries: unknown[]) => ({ log: { version: '1.2', entries } });
 
@@ -26,16 +46,12 @@ export async function captureSurface(folder: string, scope: Scope, plan: Plan, o
   signal?: AbortSignal; credentials?: Record<string, string | undefined>;
 } = {}): Promise<{ capture: Capture; surface: Surface }> {
   validateScope(scope); validatePlan(plan, scope);
-  // The browser resolves DNS itself, so the pinned public-address checks of the
-  // core cannot be enforced here. shortcut: loopback only, until a BBA proxy exists.
-  if (scope.mode !== 'loopback-lab') throw new Error('Browser capture only supports loopback-lab scopes');
   const out = await requireNewDirectory(folder);
-  const tokens = new Map<string, string>();
+  const credentials = new Map<string, { token?: string; cookie?: string }>();
   for (const step of plan.steps) if (step.credentialEnv) {
-    const token = (options.credentials ?? process.env)[step.credentialEnv];
-    if (!token) throw new Error('Missing credential environment variable');
-    if (!/^[A-Za-z0-9._~+/-]{1,4096}={0,2}$/.test(token)) throw new Error('Invalid credential format');
-    tokens.set(step.id, token);
+    const value = (options.credentials ?? process.env)[step.credentialEnv];
+    if (!value) throw new Error('Missing credential environment variable');
+    credentials.set(step.id, credentialFor(step.credentialEnv, value));
   }
 
   const startedAt = new Date().toISOString(), deadline = Date.now() + scope.limits.maxDurationMs;
@@ -45,7 +61,7 @@ export async function captureSurface(folder: string, scope: Scope, plan: Plan, o
   // Every browser request is decided here, one at a time. Allowed GETs are sent
   // by the shared scoped core (no redirects, size/time limits, no browser headers)
   // and the response is handed to the page; everything else never leaves.
-  const handle = async (route: Route, token: string | undefined) => {
+  const handle = async (route: Route, credential: { token?: string; cookie?: string } | undefined) => {
     const request = route.request();
     const entry = { method: request.method(), url: request.url(), credential: false, status: null as number | null, outcome: 'not-sent' as Outcome };
     entries.push(entry);
@@ -60,9 +76,9 @@ export async function captureSurface(folder: string, scope: Scope, plan: Plan, o
       if (stopReason) return await route.abort('blockedbyclient');
       const wait = Math.max(0, lastEnd + scope.limits.minIntervalMs - Date.now());
       if (wait) await delay(wait);
-      used++; entry.credential = token !== undefined; entry.outcome = 'sent';
+      used++; entry.credential = credential !== undefined; entry.outcome = 'sent';
       try {
-        const result = await scopedRequest(scope, entry.url, { token, signal: options.signal, remainingMs: deadline - Date.now() });
+        const result = await scopedRequest(scope, entry.url, { ...credential, signal: options.signal, remainingMs: deadline - Date.now() });
         entry.status = result.status;
         if ((result.status >= 300 && result.status < 400) || result.status === 429 || result.status >= 500) {
           stopReason = result.status === 429 ? 'rate-limited' : result.status >= 500 ? 'server-error' : 'redirect';
@@ -77,9 +93,8 @@ export async function captureSurface(folder: string, scope: Scope, plan: Plan, o
     finally { lastEnd = Date.now(); }
   };
 
-  let browser;
-  try { browser = await chromium.launch({ headless: true }); }
-  catch { throw new Error('Browser unavailable; run npx playwright-core install --only-shell chromium'); }
+  const isolated = await launchIsolated();
+  const browser = isolated.browser;
   try {
     for (const step of plan.steps) {
       if (options.signal?.aborted) stopReason ??= 'cancelled';
@@ -87,8 +102,8 @@ export async function captureSurface(folder: string, scope: Scope, plan: Plan, o
       // One ephemeral context per step: no cookies or storage cross identities.
       const context = await browser.newContext({ serviceWorkers: 'block' });
       try {
-        const token = tokens.get(step.id);
-        await context.route('**/*', route => { queue = queue.then(() => handle(route, token)); return queue; });
+        const credential = credentials.get(step.id);
+        await context.route('**/*', route => { queue = queue.then(() => handle(route, credential)); return queue; });
         // Without connectToServer the socket is mocked: no handshake leaves the browser.
         await context.routeWebSocket('**/*', ws => { websockets++; ws.close(); });
         const page = await context.newPage();
@@ -96,9 +111,11 @@ export async function captureSurface(folder: string, scope: Scope, plan: Plan, o
         if (timeout <= 0) { stopReason = 'deadline'; break; }
         // Blocked or failed loads are recorded by the route handler, not here.
         await page.goto(step.url, { waitUntil: 'networkidle', timeout }).catch(() => {});
+        // Late fetches and browser-initiated connections show up just after idle.
+        await page.waitForTimeout(Math.min(500, Math.max(0, deadline - Date.now()))).catch(() => {});
       } finally { await context.close(); }
     }
-  } finally { await browser.close(); }
+  } finally { await isolated.close(); }
   await queue;
 
   const projectable = entries.filter(e => {
@@ -106,13 +123,13 @@ export async function captureSurface(folder: string, scope: Scope, plan: Plan, o
   });
   const surface = importSurface(har(projectable.map(harRecord)), 'har');
   surface.limitations.push('Browser capture: status null means the request was blocked or not sent by BBA; see capture.json outcomes.',
-    'Only GET to exact in-scope paths was sent, with the plan Bearer token. Browser cookies and headers were not forwarded.');
+    'Only GET to exact in-scope paths was sent, with the plan credential (Bearer or Cookie). Browser cookies and headers were not forwarded; Set-Cookie from responses is not applied, so a rotating session can end unauthenticated.');
   const count = (outcome: Outcome) => entries.filter(e => e.outcome === outcome).length;
   const capture: Capture = {
-    schemaVersion: 1, toolVersion: '0.4.0', scopeDigest: digest(scope), planDigest: digest(plan),
+    schemaVersion: 1, toolVersion: '0.5.0', scopeDigest: digest(scope), planDigest: digest(plan),
     startedAt, endedAt: new Date().toISOString(), stopReason,
     counts: { sent: count('sent'), blocked: count('blocked'), 'not-sent': count('not-sent'), failed: count('failed'),
-      unrepresentable: entries.length - projectable.length, 'websocket-blocked': websockets },
+      unrepresentable: entries.length - projectable.length, 'websocket-blocked': websockets, 'leak-attempts': isolated.leaks() },
     outcomes: projectable.map(e => e.outcome),
   };
   mkdirSync(dirname(out), { recursive: true });
