@@ -4,8 +4,9 @@ import { exportReport, loadInvestigation, requireNewDirectory, saveInvestigation
 import { validateScope, validatePlan } from './scope.ts';
 import { readJson, createSession, inspectSession, exportSession, sessionSummary } from './session.ts';
 import { executeSession } from './execution.ts';
+import { importSurfaceFile, surfaceSummary } from './surface.ts';
 
-const help = `BBA 0.2.0 — investigaciones con alcance y recuperación
+const help = `BBA 0.3.0 — investigaciones, capturas y superficie
 
   npm run bba -- lab --variant vulnerable|fixed --out <new-directory>
   npm run bba -- inspect <directory>
@@ -16,6 +17,7 @@ const help = `BBA 0.2.0 — investigaciones con alcance y recuperación
   npm run bba -- inspect-run <directory>
   npm run bba -- export-run <directory> --out <new-file.json>
   npm run bba -- report-run <directory> --out <new-file.md>
+  npm run bba -- import-surface --format har|openapi|rea --input <file.json> --out <new-file.json>
 
 lab crea su propio servidor. run/resume ejecutan GET con un alcance explícito.
 Los otros comandos son offline. Ctrl+C pausa una ejecución con checkpoints.
@@ -38,7 +40,12 @@ async function main(args: string[]): Promise<void> {
   if (!command || (command === '--help' && !rest.length)) { console.log(help); return; }
   let action: () => Promise<void>;
   try {
-    if (command === 'lab') {
+    if (command === 'import-surface') {
+      const flags = options(rest, ['--format', '--input', '--out']);
+      const format = flags.get('--format');
+      if (format !== 'har' && format !== 'openapi' && format !== 'rea') throw new Error('Invalid format');
+      action = async () => { console.log(JSON.stringify(surfaceSummary(importSurfaceFile(flags.get('--input')!, format, flags.get('--out')!)), null, 2)); };
+    } else if (command === 'lab') {
       const flags = options(rest, ['--variant', '--out']);
       const variant = flags.get('--variant');
       if (variant !== 'vulnerable' && variant !== 'fixed') throw new Error('Unknown variant');

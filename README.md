@@ -1,6 +1,6 @@
 # BBA — Bug Bounty Anything
 
-Framework local de investigación de vulnerabilidades con evidencia reproducible. **Versión implementada: 0.2.0**, bloques 1 y 2 del [roadmap hacia 1.0.0](docs/ROADMAP.md). La metodología general está en [SKILL.md](SKILL.md).
+Framework local de investigación de vulnerabilidades con evidencia reproducible. **Versión implementada: 0.3.0**: bloques 1 y 2 y la importación offline del bloque 3 del [roadmap hacia 1.0.0](docs/ROADMAP.md). La metodología general está en [SKILL.md](SKILL.md).
 
 Incluye un laboratorio HTTP para detectar lectura indebida entre cuentas y un núcleo de ejecución GET con alcance explícito, presupuesto persistente, cancelación y recuperación. El núcleo admite laboratorios locales y destinos HTTPS públicos autorizados; todavía no incorpora capturas externas, scanners ni confirmación automática de vulnerabilidades fuera del laboratorio.
 
@@ -46,6 +46,19 @@ npm run bba -- report-run runs/investigation --out runs/investigation-report.md
 
 Ctrl+C cancela la ejecución y guarda lo conocido. `resume` conserva presupuesto y evidencias, requiere el mismo scope vigente y sigue solo pasos no iniciados. Una solicitud iniciada cuyo resultado se perdió queda inconclusa y nunca se reintenta automáticamente. Las detenciones por límites o errores requieren revisar la causa y una nueva investigación; no se reinician con `resume`.
 
+## Importar superficie
+
+```powershell
+npm run bba -- import-surface --format har|openapi|rea --input capture.json --out runs/surface.json
+```
+
+Proyecta un inventario de endpoints desde un HAR 1.2, un OpenAPI 3.0/3.1 en JSON o la Evidence de `inspect_web_network_capture` de REA. Es **offline**: no contacta URLs ni convierte el inventario en scope o autorización. La salida es un archivo nuevo con checksum.
+
+- Cada entrada distingue `observed` (HAR/REA) de `declared` (OpenAPI) y conserva su ubicación en el origen (`locator`, y `ordinal`/`evidence_id` para REA).
+- Se descartan headers, cuerpos, valores de query, ejemplos y descripciones. Segmentos numéricos, UUID o largos pasan a `{opaque}`; nombres y segmentos literales pueden seguir siendo sensibles.
+- `credential-present` solo indica que la captura tenía `Authorization`/`Cookie`; no prueba sesión, rol ni tenant válidos.
+- Se rechaza todo el archivo ante rutas ambiguas o con escapes, credenciales en la URL, refs externas o cíclicas, variables de server, YAML o Swagger 2, y nombres de parámetro fuera de `[A-Za-z0-9_.-]` (por ejemplo `filter[a]`).
+
 ## Qué demuestra
 
 | Solicitud | Vulnerable | Corregida |
@@ -89,4 +102,4 @@ Códigos de salida: `0` completo (en `lab`, incluso si encontró vulnerabilidade
 
 ## Próximo bloque
 
-Captura y superficie: importación HAR/OpenAPI, procedencia del inventario e integración con REA. El servicio productivo y la autorización concreta todavía no están seleccionados.
+Completar captura y superficie: navegación autenticada con Playwright y separación de inferencias sobre el inventario importado. El servicio productivo y la autorización concreta todavía no están seleccionados.

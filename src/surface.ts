@@ -1,0 +1,184 @@
+import { createHash } from 'node:crypto';
+import { writeFileSync } from 'node:fs';
+import { readJson } from './session.ts';
+import { digest } from './contracts.ts';
+
+type Parameter = { location: string; name: string };
+type Endpoint = {
+  id: string; method: string; origin: string | null; path: string;
+  pathKind: 'literal' | 'inferred-template' | 'declared-template';
+  basis: 'observed' | 'declared'; parameters: Parameter[];
+  authentication: 'credential-present' | 'not-established' | 'declared-required' | 'declared-optional';
+  status: number | null; locator: string; ordinal: number | null;
+};
+export type Surface = {
+  schemaVersion: 1; toolVersion: '0.3.0'; sourceDigest: string;
+  format: 'har' | 'openapi' | 'rea'; reaEvidenceId: string | null;
+  entries: Endpoint[]; limitations: string[];
+};
+const methods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS', 'TRACE'];
+function record(value: any): Record<string, any> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid import object');
+  return value;
+}
+function list(value: any): any[] {
+  if (!Array.isArray(value) || value.length > 5000) throw new Error('Invalid import collection');
+  return value;
+}
+function name(value: any): string {
+  if (typeof value !== 'string' || !/^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/.test(value)) throw new Error('Unsupported parameter name');
+  return value;
+}
+function safePath(path: string, declared = false): { path: string; pathKind: Endpoint['pathKind'] } {
+  if (path.length > 2048 || !path.startsWith('/') || path.startsWith('//') || /[^A-Za-z0-9/._~{}-]/.test(path)
+    || path.split('/').some(s => s === '.' || s === '..')) throw new Error('Unsupported path representation');
+  let inferred = false;
+  const result = path.split('/').map(segment => {
+    if (declared && /^\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(segment)) return segment;
+    if (/[{}]/.test(segment)) throw new Error('Invalid path template');
+    if (/^\d+$/.test(segment) || /^[a-f0-9-]{32,}$/i.test(segment) || segment.length > 40) {
+      inferred = true; return '{opaque}';
+    }
+    return segment;
+  }).join('/');
+  return { path: result, pathKind: inferred ? 'inferred-template' : declared && path.includes('{') ? 'declared-template' : 'literal' };
+}
+function urlParts(value: any) {
+  if (typeof value !== 'string' || value.length > 8192 || /[\\\x00-\x20]/.test(value)) throw new Error('Invalid captured URL');
+  let url: URL;
+  try { url = new URL(value); } catch { throw new Error('Invalid captured URL'); }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('Unsupported captured URL');
+  // Reject normalization ambiguity before extracting a surface location.
+  const rawPath = value.replace(/^https?:\/\/[^/?#]+/i, '').split(/[?#]/)[0] || '/';
+  if (rawPath !== url.pathname) throw new Error('Non-canonical captured path');
+  return { url, ...safePath(url.pathname) };
+}
+function endpoint(input: Omit<Endpoint, 'id'>): Endpoint {
+  input.parameters = [...new Map(input.parameters.map(p => [p.location + ':' + p.name, p])).values()]
+    .sort((a, b) => (a.location + a.name).localeCompare(b.location + b.name));
+  return { id: 'sha256:' + digest(input), ...input };
+}
+function harEntry(entry: any, ordinal: number, locator: string): Endpoint {
+  const request = record(record(entry).request), response = record(entry.response);
+  if (!methods.includes(request.method)) throw new Error('Unsupported captured method');
+  const { url, path, pathKind } = urlParts(request.url);
+  if (!Number.isInteger(response.status) || response.status < 0 || response.status > 599) throw new Error('Invalid captured status');
+  const parameters: Parameter[] = [];
+  for (const key of url.searchParams.keys()) parameters.push({ location: 'query', name: name(key) });
+  for (const item of list(request.queryString ?? [])) parameters.push({ location: 'query', name: name(record(item).name) });
+  const headers = list(request.headers ?? []);
+  const credentials = headers.some(h => ['authorization', 'cookie'].includes(String(record(h).name).toLowerCase()))
+    || list(request.cookies ?? []).length > 0;
+  return endpoint({ method: request.method, origin: url.origin, path, pathKind, basis: 'observed', parameters,
+    authentication: credentials ? 'credential-present' : 'not-established', status: response.status || null, locator, ordinal });
+}
+
+function openapi(doc: any): Endpoint[] {
+  record(doc);
+  if (typeof doc.openapi !== 'string' || !/^3\.[01]\.\d+$/.test(doc.openapi)) throw new Error('Only OpenAPI 3.0 and 3.1 JSON are supported');
+  const resolve = (item: any): any => {
+    let current = record(item); const seen = new Set();
+    while (Object.hasOwn(current, '$ref')) {
+      const ref = current.$ref;
+      if (typeof ref !== 'string' || !ref.startsWith('#/') || seen.has(ref) || seen.size >= 20) throw new Error('Unsupported or cyclic OpenAPI reference');
+      // Sibling semantics vary between Reference Objects and Path Items. Do
+      // not silently discard potentially meaningful siblings in this subset.
+      if (Object.keys(current).length !== 1) throw new Error('Reference siblings are unsupported');
+      seen.add(ref);
+      let target = doc;
+      for (const piece of ref.slice(2).split('/')) {
+        const key = piece.replace(/~1/g, '/').replace(/~0/g, '~');
+        if (!target || !Object.hasOwn(target, key)) throw new Error('Missing local OpenAPI reference');
+        target = target[key];
+      }
+      current = record(target);
+    }
+    return current;
+  };
+  const result: Endpoint[] = [];
+  for (const [path, raw] of Object.entries(record(doc.paths))) {
+    if (path.startsWith('x-')) continue;
+    const item = resolve(raw);
+    const pathPointer = '/paths/' + path.replace(/~/g, '~0').replace(/\//g, '~1');
+    for (const method of methods) {
+      const key = method.toLowerCase(); if (!Object.hasOwn(item, key)) continue;
+      const operation = record(item[key]);
+      const servers = operation.servers ?? item.servers ?? doc.servers ?? [{ url: '/' }];
+      if (!list(servers).length) throw new Error('Empty OpenAPI server list is unsupported');
+      const parameters = new Map<string, Parameter>();
+      for (const rawParam of [...list(item.parameters ?? []), ...list(operation.parameters ?? [])]) {
+        const p = resolve(rawParam);
+        if (!['query', 'path', 'header', 'cookie'].includes(p.in)) throw new Error('Invalid parameter location');
+        const param = { location: p.in, name: name(p.name) }; parameters.set(param.location + ':' + param.name, param);
+      }
+      const security = operation.security ?? doc.security;
+      if (security !== undefined) list(security).forEach(record);
+      const authentication = security === undefined ? 'not-established'
+        : security.length === 0 || security.some(s => Object.keys(s).length === 0) ? 'declared-optional' : 'declared-required';
+      for (const server of servers) {
+        const serverUrl = record(server).url;
+        if (typeof serverUrl !== 'string') throw new Error('Invalid OpenAPI server');
+        let origin: string | null = null, prefix = '';
+        if (serverUrl.includes('{')) throw new Error('Server variables require explicit resolution');
+        if (serverUrl.startsWith('/') && !serverUrl.startsWith('//')) prefix = serverUrl.replace(/\/$/, '');
+        else {
+          const parts = urlParts(serverUrl);
+          if (parts.url.search || parts.url.hash) throw new Error('Invalid OpenAPI server URL');
+          origin = parts.url.origin; prefix = parts.url.pathname.replace(/\/$/, '');
+        }
+        const projected = safePath(prefix + path, true);
+        result.push(endpoint({ method, origin, ...projected, basis: 'declared', parameters: [...parameters.values()],
+          authentication, status: null, locator: pathPointer + '/' + key, ordinal: null }));
+        if (result.length > 5000) throw new Error('Surface entry limit exceeded');
+      }
+    }
+  }
+  return result;
+}
+
+export function importSurface(input: unknown, format: Surface['format']): Surface {
+  const doc = record(input);
+  let entries: Endpoint[], reaEvidenceId: string | null = null;
+  const limitations = ['Offline projection only; no URL was fetched and no authorization was granted.',
+    'Headers, bodies, query values, examples and descriptions are omitted. Names and literal path segments can still be sensitive; review before sharing.',
+    'Numeric, UUID-like and long path segments are replaced by opaque templates. Templates are not handler identity or executable URLs.',
+    'Credential presence does not establish a valid session, role, tenant or successful authentication.'];
+  if (format === 'har') {
+    const log = record(doc.log);
+    if (log.version !== '1.2') throw new Error('Only HAR 1.2 is supported');
+    entries = list(log.entries).map((e, i) => harEntry(e, i, '/log/entries/' + i));
+    limitations.push('Coverage is limited to supplied records, not the complete application or capture lifecycle.');
+  } else if (format === 'openapi') {
+    entries = openapi(doc);
+    limitations.push('Declared operations are not observed execution. Relative servers have unknown origin.',
+      'JSON subset only: path/operation servers, parameters and security declarations. No schema validation, YAML, external refs, server variables, callbacks or body-property inventory.');
+  } else if (format === 'rea') {
+    if (doc.operation !== 'inspect_web_network_capture' || typeof doc.evidence_id !== 'string'
+      || !/^[A-Za-z0-9:_.-]{1,200}$/.test(doc.evidence_id)) throw new Error('Expected complete REA capture Evidence');
+    const normalized = record(doc.normalized_result);
+    if (normalized.format !== 'har' || !Array.isArray(normalized.records)
+      || normalized.records.length !== normalized.total_records) throw new Error('Complete REA HAR records are required');
+    reaEvidenceId = doc.evidence_id;
+    const ordinals = new Set();
+    entries = list(normalized.records).map(r => {
+      record(r);
+      if (!Number.isInteger(r.ordinal) || r.ordinal < 0 || ordinals.has(r.ordinal)) throw new Error('Invalid REA ordinal');
+      ordinals.add(r.ordinal);
+      return harEntry(r.reported, r.ordinal, '/normalized_result/records/' + (ordinals.size - 1) + '/reported');
+    });
+    limitations.push('REA Evidence ID is an attributed reference, not independently authenticated by BBA. Imported source limitations and redactions may hide fields; original Evidence must accompany review.');
+  } else throw new Error('Unsupported surface format');
+  return { schemaVersion: 1, toolVersion: '0.3.0', sourceDigest: digest(input), format, reaEvidenceId, entries, limitations };
+}
+
+export function importSurfaceFile(path: string, format: Surface['format'], output: string): Surface {
+  const surface = importSurface(readJson(path), format);
+  writeFileSync(output, JSON.stringify({ surface, sha256: digest(surface) }, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
+  return surface;
+}
+export function surfaceSummary(surface: Surface) {
+  const identities = new Set(surface.entries.map(e => [e.method, e.origin, e.path].join(' ')));
+  return { format: surface.format, records: surface.entries.length, endpointCandidates: identities.size,
+    observed: surface.entries.filter(e => e.basis === 'observed').length,
+    declared: surface.entries.filter(e => e.basis === 'declared').length, reaEvidenceId: surface.reaEvidenceId };
+}
