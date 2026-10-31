@@ -13,14 +13,16 @@ import type { ProgramBudget } from './budget.ts';
 import type { Lang } from './i18n.ts';
 
 export type JwtClaimValueType = 'auto' | 'string' | 'number' | 'boolean' | 'json';
+export type JwtMutationMode = 'add-canary' | 'replace' | 'alg-none' | 'expired-token';
 export type JwtIntegrityConfig = { schemaVersion: 1; policyReference: string; boundary: 'jwt-signature-integrity';
   url: string; request: RequestSpec; credentialEnv: string; proofPointer: string;
-  mutation: { claim: string; mode: 'add-canary' | 'replace'; valueEnv?: string; valueType?: JwtClaimValueType } };
+  mutation: { claim?: string; mode: JwtMutationMode; valueEnv?: string; valueType?: JwtClaimValueType } };
 export type JwtIntegrityResult = { schemaVersion: 1; sessionId: string; scopeDigest: string; configDigest: string;
   status: 'confirmed' | 'not-reproduced' | 'unresolved'; reason: string; evidence: string[];
   limitation: string[] };
 
 const jwtValueTypes: JwtClaimValueType[] = ['auto', 'string', 'number', 'boolean', 'json'];
+const jwtModes: JwtMutationMode[] = ['add-canary', 'replace', 'alg-none', 'expired-token'];
 
 export function validateJwtIntegrity(value: unknown, scope: Scope, checkTime = true): asserts value is JwtIntegrityConfig {
   validateScope(scope);
@@ -31,13 +33,32 @@ export function validateJwtIntegrity(value: unknown, scope: Scope, checkTime = t
     || typeof value.url !== 'string') throw new Error('Invalid JWT integrity contract');
   assertRequestAllowed(scope, value.url, value.request, checkTime ? Date.now() : Date.parse(scope.authorization.validFrom));
   validateProjections([{ name: 'proof', pointer: value.proofPointer }]);
-  optionalFields(value.mutation, ['claim', 'mode'], ['valueEnv', 'valueType']);
-  if (typeof value.mutation.claim !== 'string' || !/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(value.mutation.claim)
-    || !['add-canary', 'replace'].includes(value.mutation.mode)
-    || (value.mutation.valueType !== undefined && !jwtValueTypes.includes(value.mutation.valueType))
-    || (value.mutation.mode === 'add-canary' && (value.mutation.valueEnv !== undefined || value.mutation.valueType !== undefined))
-    || (value.mutation.mode === 'replace' && (typeof value.mutation.valueEnv !== 'string'
-      || !/^BBA_INPUT_[A-Z0-9_]{1,50}$/.test(value.mutation.valueEnv)))) throw new Error('Invalid JWT mutation');
+  optionalFields(value.mutation, ['mode'], ['claim', 'valueEnv', 'valueType']);
+  if (!jwtModes.includes(value.mutation.mode)
+    || (value.mutation.valueType !== undefined && !jwtValueTypes.includes(value.mutation.valueType))) {
+    throw new Error('Invalid JWT mutation');
+  }
+  if (value.mutation.mode === 'add-canary') {
+    if (typeof value.mutation.claim !== 'string' || !/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(value.mutation.claim)
+      || value.mutation.valueEnv !== undefined || value.mutation.valueType !== undefined) {
+      throw new Error('Invalid JWT mutation');
+    }
+  } else if (value.mutation.mode === 'replace') {
+    if (typeof value.mutation.claim !== 'string' || !/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(value.mutation.claim)
+      || typeof value.mutation.valueEnv !== 'string' || !/^BBA_INPUT_[A-Z0-9_]{1,50}$/.test(value.mutation.valueEnv)) {
+      throw new Error('Invalid JWT mutation');
+    }
+  } else if (value.mutation.mode === 'alg-none') {
+    if (value.mutation.claim !== undefined || value.mutation.valueEnv !== undefined || value.mutation.valueType !== undefined) {
+      throw new Error('Invalid JWT mutation');
+    }
+  } else if (value.mutation.mode === 'expired-token') {
+    if (value.mutation.claim !== undefined || value.mutation.valueType !== undefined
+      || (value.mutation.valueEnv !== undefined && (typeof value.mutation.valueEnv !== 'string'
+        || !/^BBA_TOKEN_[A-Z0-9_]{1,50}$/.test(value.mutation.valueEnv) || value.mutation.valueEnv === value.credentialEnv))) {
+      throw new Error('Invalid JWT mutation');
+    }
+  }
 }
 
 function decodePart(encoded: string): Record<string, unknown> {
@@ -90,20 +111,50 @@ export function mutateOwnedJwt(token: string, config: JwtIntegrityConfig, enviro
   if (parts.length !== 3 || !/^[A-Za-z0-9_-]{4,8192}$/.test(parts[2])) throw new Error('Expected signed compact JWT');
   const header = decodePart(parts[0]), payload = decodePart(parts[1]);
   if (typeof header.alg !== 'string' || !header.alg || header.alg.toLowerCase() === 'none') throw new Error('Expected signed compact JWT');
+  if (config.mutation.mode === 'alg-none') {
+    header.alg = 'none';
+    const headerB64 = Buffer.from(JSON.stringify(header)).toString('base64url');
+    const result = `${headerB64}.${parts[1]}.`;
+    if (result.length > 4096 || result === token) throw new Error('Invalid derived JWT length');
+    return result;
+  }
+  if (config.mutation.mode === 'expired-token') {
+    if (config.mutation.valueEnv !== undefined) {
+      const expired = environment[config.mutation.valueEnv];
+      if (!expired) throw new Error('Missing expired JWT environment variable');
+      credentialFor(config.mutation.valueEnv, expired);
+      const expParts = expired.split('.');
+      if (expParts.length !== 3 || !/^[A-Za-z0-9_-]{4,8192}$/.test(expParts[2])) throw new Error('Expected signed expired compact JWT');
+      const expHeader = decodePart(expParts[0]), expPayload = decodePart(expParts[1]);
+      if (typeof expHeader.alg !== 'string' || !expHeader.alg || expHeader.alg.toLowerCase() === 'none') throw new Error('Expected signed expired compact JWT');
+      if (typeof expPayload.exp !== 'number' || !Number.isFinite(expPayload.exp) || expPayload.exp * 1000 >= Date.now()) {
+        throw new Error('Supplied JWT is not expired');
+      }
+      if (expired === token || expired.length > 4096) throw new Error('Invalid derived JWT length');
+      return expired;
+    }
+    if (payload.exp === 1) throw new Error('Supplied active JWT already has exp=1');
+    payload.exp = 1;
+    const alteredExp = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    const resultExp = `${parts[0]}.${alteredExp}.${parts[2]}`;
+    if (resultExp.length > 4096 || resultExp === token) throw new Error('Invalid derived JWT length');
+    return resultExp;
+  }
+  const claim = config.mutation.claim!;
   if (config.mutation.mode === 'add-canary') {
-    if (Object.hasOwn(payload, config.mutation.claim)) throw new Error('Canary claim already exists');
-    payload[config.mutation.claim] = createHmac('sha256', token).update(digest(config)).digest('hex').slice(0, 24);
+    if (Object.hasOwn(payload, claim)) throw new Error('Canary claim already exists');
+    payload[claim] = createHmac('sha256', token).update(digest(config)).digest('hex').slice(0, 24);
   } else {
-    if (!Object.hasOwn(payload, config.mutation.claim)) throw new Error('Claim to replace is absent');
+    if (!Object.hasOwn(payload, claim)) throw new Error('Claim to replace is absent');
     const replacement = environment[config.mutation.valueEnv!];
     if (replacement === undefined || replacement.length < 1 || Buffer.byteLength(replacement) > 512) {
       throw new Error('Missing or unchanged controlled claim value');
     }
-    const nextValue = coerceReplacement(replacement, payload[config.mutation.claim], config.mutation.valueType ?? 'auto');
-    if (canonical(nextValue) === canonical(payload[config.mutation.claim])) {
+    const nextValue = coerceReplacement(replacement, payload[claim], config.mutation.valueType ?? 'auto');
+    if (canonical(nextValue) === canonical(payload[claim])) {
       throw new Error('Missing or unchanged controlled claim value');
     }
-    payload[config.mutation.claim] = nextValue;
+    payload[claim] = nextValue;
   }
   const altered = Buffer.from(JSON.stringify(payload)).toString('base64url');
   const result = `${parts[0]}.${altered}.${parts[2]}`;
@@ -149,7 +200,12 @@ export function evaluateJwtIntegrity(session: Session, config: JwtIntegrityConfi
     || facts[1].sha256 !== facts[0].sha256) {
     result.reason = 'The altered token did not produce the same protected fact; impact remains unproven.'; return result;
   }
-  result.status = 'confirmed'; result.reason = 'A JWT with changed claims and its original signature received the same protected fact as the valid controlled token; anonymous access was denied.';
+  result.status = 'confirmed';
+  result.reason = config.mutation.mode === 'alg-none'
+    ? 'An unsigned JWT with alg=none received the same protected fact as the valid controlled token; anonymous access was denied.'
+    : config.mutation.mode === 'expired-token'
+      ? 'An expired JWT received the same protected fact as the valid controlled token; anonymous access was denied.'
+      : 'A JWT with changed claims and its original signature received the same protected fact as the valid controlled token; anonymous access was denied.';
   return result;
 }
 

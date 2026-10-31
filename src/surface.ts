@@ -1,7 +1,9 @@
-import { writeFileSync } from 'node:fs';
+import { closeSync, fstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { readJson } from './session.ts';
 import { digest } from './contracts.ts';
 import { fields, optionalFields, strictUrl } from './scope.ts';
+import { extractGraphqlSurfaceInput } from './graphql.ts';
+import { extractJsBundleRoutes } from './js-surface.ts';
 import pkg from '../package.json' with { type: 'json' };
 
 type Parameter = { location: string; name: string };
@@ -14,7 +16,7 @@ type Endpoint = {
 };
 export type Surface = {
   schemaVersion: 1; toolVersion: '0.3.0'; producerVersion?: string; sourceDigest: string;
-  format: 'har' | 'openapi' | 'rea'; reaEvidenceId: string | null;
+  format: 'har' | 'openapi' | 'rea' | 'graphql' | 'js-bundle'; reaEvidenceId: string | null;
   entries: Endpoint[]; skipped?: number; limitations: string[];
 };
 const methods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS', 'TRACE'];
@@ -159,13 +161,13 @@ function openapi(doc: any): Endpoint[] {
 }
 
 export function importSurface(input: unknown, format: Surface['format'], options: { quarantine?: boolean } = {}): Surface {
-  const doc = record(input);
   let entries: Endpoint[], reaEvidenceId: string | null = null, skipped = 0;
   const limitations = ['Offline projection only; no URL was fetched and no authorization was granted.',
     'Headers, bodies, query values, examples and descriptions are omitted. Names and literal path segments can still be sensitive; review before sharing.',
     'Numeric, UUID-like and long path segments are replaced by opaque templates. Templates are not handler identity or executable URLs.',
     'Credential presence does not establish a valid session, role, tenant or successful authentication.'];
   if (format === 'har') {
+    const doc = record(input);
     const log = record(doc.log);
     if (log.version !== '1.2') throw new Error('Only HAR 1.2 is supported');
     entries = [];
@@ -180,10 +182,12 @@ export function importSurface(input: unknown, format: Surface['format'], options
     if (skipped > 0) limitations.push(`Quarantine mode skipped ${skipped} unrepresentable HAR entries.`);
     limitations.push('Coverage is limited to supplied records, not the complete application or capture lifecycle.');
   } else if (format === 'openapi') {
+    const doc = record(input);
     entries = openapi(doc);
     limitations.push('Declared operations are not observed execution. Relative servers have unknown origin.',
       'JSON subset only: Swagger 2.0 host/basePath/schemes or OpenAPI 3.x servers, parameters and security declarations. No schema validation, YAML, external refs, server variables, callbacks or body-property inventory.');
   } else if (format === 'rea') {
+    const doc = record(input);
     if (doc.operation !== 'inspect_web_network_capture' || typeof doc.evidence_id !== 'string'
       || !/^[A-Za-z0-9:_.-]{1,200}$/.test(doc.evidence_id)) throw new Error('Expected complete REA capture Evidence');
     const normalized = record(doc.normalized_result);
@@ -205,6 +209,55 @@ export function importSurface(input: unknown, format: Surface['format'], options
     }
     if (skipped > 0) limitations.push(`Quarantine mode skipped ${skipped} unrepresentable REA records.`);
     limitations.push('REA Evidence ID is an attributed reference, not independently authenticated by BBA. Imported source limitations and redactions may hide fields; original Evidence must accompany review.');
+  } else if (format === 'graphql') {
+    const gql = extractGraphqlSurfaceInput(input);
+    if (gql.origin !== null && strictUrl(gql.origin + '/').origin !== gql.origin) {
+      throw new Error('Invalid GraphQL surface origin');
+    }
+    const projected = safePath(gql.endpointPath, true);
+    entries = gql.operations.map(op => endpoint({
+      method: 'POST',
+      origin: gql.origin,
+      ...projected,
+      basis: 'declared',
+      parameters: [
+        { location: 'body', name: name(`op.${op.rootKind}.${op.fieldName}`) },
+        ...op.argNames.map(a => ({ location: 'body', name: name(a) })),
+      ],
+      authentication: 'not-established',
+      status: null,
+      locator: op.locator,
+      ordinal: null,
+    }));
+    limitations.push('GraphQL projection inventories root Query and Mutation fields statically; nested resolvers, directives and custom scalars are not evaluated.');
+  } else if (format === 'js-bundle') {
+    const rawRoutes = extractJsBundleRoutes(input);
+    const seen = new Set<string>();
+    entries = [];
+    for (const r of rawRoutes) {
+      try {
+        if (r.origin !== null && strictUrl(r.origin + '/').origin !== r.origin) throw new Error('Invalid JS route origin');
+        const projected = safePath(r.path, true);
+        const dedupKey = `${r.method} ${r.origin ?? ''} ${projected.path} ${r.queryNames.slice().sort().join(',')}`;
+        if (seen.has(dedupKey)) continue;
+        seen.add(dedupKey);
+        entries.push(endpoint({
+          method: methods.includes(r.method) ? r.method : 'GET',
+          origin: r.origin,
+          ...projected,
+          basis: 'declared',
+          parameters: r.queryNames.map(q => ({ location: 'query', name: name(q) })),
+          authentication: 'not-established',
+          status: null,
+          locator: r.locator,
+          ordinal: null,
+        }));
+      } catch (error) {
+        if (!options.quarantine) throw error;
+        skipped++;
+      }
+    }
+    limitations.push('Static JS/SourceMap route extraction never executes code; dynamic URL concatenation and runtime base URLs remain unresolved.');
   } else throw new Error('Unsupported surface format');
   return {
     schemaVersion: 1,
@@ -254,8 +307,19 @@ export function projectCapturedHar(records: unknown[]): { surface: Surface; kept
   return { surface, keptIndices, unrepresentable };
 }
 
+function readBoundedSurfaceSource(path: string, format: Surface['format']): unknown {
+  if (format !== 'graphql' && format !== 'js-bundle') return readJson(path);
+  const fd = openSync(path, 'r');
+  try {
+    if (fstatSync(fd).size > 2 * 1024 * 1024) throw new Error('Surface input exceeds 2 MiB');
+    return readFileSync(fd, 'utf8');
+  } finally {
+    closeSync(fd);
+  }
+}
+
 export function importSurfaceFile(path: string, format: Surface['format'], output: string, options: { quarantine?: boolean } = {}): Surface {
-  const surface = importSurface(readJson(path), format, options);
+  const surface = importSurface(readBoundedSurfaceSource(path, format), format, options);
   writeFileSync(output, JSON.stringify({ surface, sha256: digest(surface) }, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
   return surface;
 }
@@ -272,7 +336,7 @@ export function validateSurfaceBundle(value: unknown): asserts value is { surfac
   fields(value, ['surface', 'sha256']);
   const s = value.surface;
   optionalFields(s, ['schemaVersion', 'toolVersion', 'sourceDigest', 'format', 'reaEvidenceId', 'entries', 'limitations'], ['producerVersion', 'skipped']);
-  if (s.schemaVersion !== 1 || s.toolVersion !== '0.3.0' || !['har', 'openapi', 'rea'].includes(s.format)
+  if (s.schemaVersion !== 1 || s.toolVersion !== '0.3.0' || !['har', 'openapi', 'rea', 'graphql', 'js-bundle'].includes(s.format)
     || (s.producerVersion !== undefined && (typeof s.producerVersion !== 'string' || !/^\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(s.producerVersion)))
     || (s.skipped !== undefined && (!Number.isSafeInteger(s.skipped) || s.skipped < 0))
     || typeof s.sourceDigest !== 'string' || !/^[a-f0-9]{64}$/.test(s.sourceDigest)

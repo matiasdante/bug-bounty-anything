@@ -36,6 +36,17 @@ import { ssrfCallbackCheck, resumeSsrfCallbackCheck, validateSsrfCallback } from
 import { cacheCheck, resumeCacheCheck, validateCacheCheck } from './cache-check.ts';
 import { raceCheck, validateRaceCheck } from './race-check.ts';
 import { csrfCheck, validateCsrfCheck } from './csrf-check.ts';
+import { graphqlCheck, resumeGraphqlCheck, validateGraphqlCheck } from './graphql-check.ts';
+import { oauthCheck, resumeOauthCheck, validateOauthCheck } from './oauth-check.ts';
+import { redirectCheck, resumeRedirectCheck, validateRedirectCheck } from './redirect-check.ts';
+import { bootstrapCredentials, validateAuthBootstrap } from './auth-bootstrap.ts';
+import { importPolicyFile } from './policy-import.ts';
+import type { PolicyFormat } from './policy-import.ts';
+import { planCandidatesFile } from './candidate-planner.ts';
+import { exportSubmission } from './report-platform.ts';
+import type { SubmissionPlatform } from './report-platform.ts';
+import { generateSigningKeypair, signEvidence, verifyEvidenceSignature } from './signing.ts';
+import { exportInspectorHtml, startInspectorServer } from './ui.ts';
 import { pickText } from './i18n.ts';
 import type { Lang } from './i18n.ts';
 
@@ -74,6 +85,9 @@ const subcommandAliases: Record<string, Record<string, string>> = {
     template: 'template-check',
     ssrf: 'ssrf-callback-check',
     browser: 'browser-check',
+    graphql: 'graphql-check',
+    oauth: 'oauth-check',
+    redirect: 'redirect-check',
   },
   study: {
     bundle: 'study-bundle',
@@ -135,8 +149,25 @@ async function withCancellation<T>(action: (signal: AbortSignal) => Promise<T>):
   finally { process.off('SIGINT', cancel); process.off('SIGTERM', cancel); }
 }
 
-async function runCancellable(folder: string, scope: Scope, budget?: ProgramBudget): Promise<number> {
-  const state = await withCancellation(signal => executeSession(folder, scope, { signal, budget }));
+async function maybeBootstrapCredentials(
+  flags: Map<string, string>,
+  scope: Scope,
+  signal: AbortSignal,
+  budget?: ProgramBudget,
+): Promise<Record<string, string | undefined> | undefined> {
+  const bootstrapPath = flags.get('--auth-bootstrap');
+  if (!bootstrapPath) return undefined;
+  const cfg = readJson(bootstrapPath);
+  validateAuthBootstrap(cfg, scope);
+  const { credentials } = await bootstrapCredentials(scope, cfg, { signal, budget });
+  return credentials;
+}
+
+async function runCancellable(folder: string, scope: Scope, budget?: ProgramBudget, flags?: Map<string, string>): Promise<number> {
+  const state = await withCancellation(async signal => {
+    const credentials = flags ? await maybeBootstrapCredentials(flags, scope, signal, budget) : undefined;
+    return executeSession(folder, scope, { signal, budget, credentials });
+  });
   console.log(JSON.stringify(sessionSummary(state), null, 2));
   return state.status === 'paused' ? 130 : state.status === 'partial' ? 3 : state.status === 'stopped' ? 1 : 0;
 }
@@ -189,23 +220,27 @@ export const commandSpecs: CommandSpec[] = [
   },
   {
     name: 'run',
-    usage: 'run --scope <scope.json> --plan <plan.json> --out <new-directory>',
+    usage: 'run --scope <scope.json> --plan <plan.json> --out <new-directory> [--auth-bootstrap <auth.json>]',
     requiredFlags: ['--scope', '--plan', '--out'],
+    optionalFlags: ['--auth-bootstrap'],
     async execute({ flags }) {
       const scope = readJson(flags.get('--scope')!); validateScope(scope);
       const plan = readJson(flags.get('--plan')!); validatePlan(plan, scope);
+      if (flags.has('--auth-bootstrap')) validateAuthBootstrap(readJson(flags.get('--auth-bootstrap')!), scope);
       createSession(flags.get('--out')!, scope, plan);
-      return usingScopeBudget(scope, flags.get('--scope')!, budget => runCancellable(flags.get('--out')!, scope, budget));
+      return usingScopeBudget(scope, flags.get('--scope')!, budget => runCancellable(flags.get('--out')!, scope, budget, flags));
     },
   },
   {
     name: 'resume',
-    usage: 'resume <directory> --scope <same-scope.json>',
+    usage: 'resume <directory> --scope <same-scope.json> [--auth-bootstrap <auth.json>]',
     positional: true,
     requiredFlags: ['--scope'],
+    optionalFlags: ['--auth-bootstrap'],
     async execute({ positional, flags }) {
       const scope = readJson(flags.get('--scope')!); validateScope(scope);
-      return usingScopeBudget(scope, flags.get('--scope')!, budget => runCancellable(positional!, scope, budget));
+      if (flags.has('--auth-bootstrap')) validateAuthBootstrap(readJson(flags.get('--auth-bootstrap')!), scope);
+      return usingScopeBudget(scope, flags.get('--scope')!, budget => runCancellable(positional!, scope, budget, flags));
     },
   },
   {
@@ -238,12 +273,14 @@ export const commandSpecs: CommandSpec[] = [
   },
   {
     name: 'import-surface',
-    usage: 'import-surface --format har|openapi|rea --input <file.json> --out <new-file.json> [--quarantine]',
+    usage: 'import-surface --format har|openapi|rea|graphql|js-bundle --input <file> --out <new-file.json> [--quarantine]',
     requiredFlags: ['--format', '--input', '--out'],
     switches: ['--quarantine'],
     async execute({ flags, switches }) {
       const format = flags.get('--format');
-      if (format !== 'har' && format !== 'openapi' && format !== 'rea') throw new Error('InvalidUsage');
+      if (format !== 'har' && format !== 'openapi' && format !== 'rea' && format !== 'graphql' && format !== 'js-bundle') {
+        throw new Error('InvalidUsage');
+      }
       const surface = importSurfaceFile(flags.get('--input')!, format, flags.get('--out')!, { quarantine: switches.has('--quarantine') });
       console.log(JSON.stringify(surfaceSummary(surface), null, 2));
     },
@@ -375,12 +412,17 @@ export const commandSpecs: CommandSpec[] = [
   },
   {
     name: 'investigate',
-    usage: 'investigate --scope <scope.json> --surface <surface.json> --profile <profile.json> --out <new-directory>',
+    usage: 'investigate --scope <scope.json> --surface <surface.json> --profile <profile.json> --out <new-directory> [--auth-bootstrap <auth.json>]',
     requiredFlags: ['--scope', '--surface', '--profile', '--out'],
+    optionalFlags: ['--auth-bootstrap'],
     async execute({ flags, lang }) {
       const scope = readJson(flags.get('--scope')!); validateScope(scope);
+      if (flags.has('--auth-bootstrap')) validateAuthBootstrap(readJson(flags.get('--auth-bootstrap')!), scope);
       const surface = readJson(flags.get('--surface')!), profile = readJson(flags.get('--profile')!);
-      const result = await usingScopeBudget(scope, flags.get('--scope')!, budget => withCancellation(signal => investigateSurface(flags.get('--out')!, scope, surface, profile, { signal, budget, lang })));
+      const result = await usingScopeBudget(scope, flags.get('--scope')!, budget => withCancellation(async signal => {
+        const credentials = await maybeBootstrapCredentials(flags, scope, signal, budget);
+        return investigateSurface(flags.get('--out')!, scope, surface, profile, { signal, budget, lang, credentials });
+      }));
       console.log(JSON.stringify(result, null, 2));
       return result.stopped === 'cancelled' ? 130 : result.stopped === 'no-testable-hypotheses' ? 3 : result.stopped && result.stopped !== 'proof-complete' ? 1 : 0;
     },
@@ -746,6 +788,177 @@ export const commandSpecs: CommandSpec[] = [
       console.log(JSON.stringify(readPageSurface(positional!), null, 2));
     },
   },
+  {
+    name: 'graphql-check',
+    usage: 'graphql-check --scope <scope.json> --config <graphql-check.json> --out <new-directory> [--auth-bootstrap <auth.json>]',
+    requiredFlags: ['--scope', '--config', '--out'],
+    optionalFlags: ['--auth-bootstrap'],
+    async execute({ flags, lang }) {
+      const scope = readJson(flags.get('--scope')!); validateScope(scope);
+      const config = readJson(flags.get('--config')!); validateGraphqlCheck(config, scope);
+      if (flags.has('--auth-bootstrap')) validateAuthBootstrap(readJson(flags.get('--auth-bootstrap')!), scope);
+      const result = await usingScopeBudget(scope, flags.get('--scope')!, budget => withCancellation(async signal => {
+        const credentials = await maybeBootstrapCredentials(flags, scope, signal, budget);
+        return graphqlCheck(flags.get('--out')!, scope, config, { signal, budget, lang, credentials });
+      }));
+      console.log(JSON.stringify(result, null, 2));
+      return result.status === 'unresolved' ? 3 : 0;
+    },
+  },
+  {
+    name: 'resume-graphql-check',
+    usage: 'resume-graphql-check <directory> --scope <same-scope.json> --config <same-graphql-check.json> [--auth-bootstrap <auth.json>]',
+    positional: true,
+    requiredFlags: ['--scope', '--config'],
+    optionalFlags: ['--auth-bootstrap'],
+    async execute({ positional, flags, lang }) {
+      const scope = readJson(flags.get('--scope')!); validateScope(scope);
+      const config = readJson(flags.get('--config')!); validateGraphqlCheck(config, scope);
+      if (flags.has('--auth-bootstrap')) validateAuthBootstrap(readJson(flags.get('--auth-bootstrap')!), scope);
+      const result = await usingScopeBudget(scope, flags.get('--scope')!, budget => withCancellation(async signal => {
+        const credentials = await maybeBootstrapCredentials(flags, scope, signal, budget);
+        return resumeGraphqlCheck(positional!, scope, config, { signal, budget, lang, credentials });
+      }));
+      console.log(JSON.stringify(result, null, 2));
+      return result.status === 'unresolved' ? 3 : 0;
+    },
+  },
+  {
+    name: 'oauth-check',
+    usage: 'oauth-check --scope <scope.json> --config <oauth-check.json> --out <new-directory>',
+    requiredFlags: ['--scope', '--config', '--out'],
+    async execute({ flags, lang }) {
+      const scope = readJson(flags.get('--scope')!); validateScope(scope);
+      const config = readJson(flags.get('--config')!); validateOauthCheck(config, scope);
+      const result = await usingScopeBudget(scope, flags.get('--scope')!, budget => withCancellation(signal => oauthCheck(flags.get('--out')!, scope, config, { signal, budget, lang })));
+      console.log(JSON.stringify(result, null, 2));
+      return result.status === 'unresolved' ? 3 : 0;
+    },
+  },
+  {
+    name: 'resume-oauth-check',
+    usage: 'resume-oauth-check <directory> --scope <same-scope.json> --config <same-oauth-check.json>',
+    positional: true,
+    requiredFlags: ['--scope', '--config'],
+    async execute({ positional, flags, lang }) {
+      const scope = readJson(flags.get('--scope')!); validateScope(scope);
+      const config = readJson(flags.get('--config')!); validateOauthCheck(config, scope);
+      const result = await usingScopeBudget(scope, flags.get('--scope')!, budget => withCancellation(signal => resumeOauthCheck(positional!, scope, config, { signal, budget, lang })));
+      console.log(JSON.stringify(result, null, 2));
+      return result.status === 'unresolved' ? 3 : 0;
+    },
+  },
+  {
+    name: 'redirect-check',
+    usage: 'redirect-check --scope <scope.json> --config <redirect-check.json> --out <new-directory>',
+    requiredFlags: ['--scope', '--config', '--out'],
+    async execute({ flags, lang }) {
+      const scope = readJson(flags.get('--scope')!); validateScope(scope);
+      const config = readJson(flags.get('--config')!); validateRedirectCheck(config, scope);
+      const result = await usingScopeBudget(scope, flags.get('--scope')!, budget => withCancellation(signal => redirectCheck(flags.get('--out')!, scope, config, { signal, budget, lang })));
+      console.log(JSON.stringify(result, null, 2));
+      return result.status === 'unresolved' ? 3 : 0;
+    },
+  },
+  {
+    name: 'resume-redirect-check',
+    usage: 'resume-redirect-check <directory> --scope <same-scope.json> --config <same-redirect-check.json>',
+    positional: true,
+    requiredFlags: ['--scope', '--config'],
+    async execute({ positional, flags, lang }) {
+      const scope = readJson(flags.get('--scope')!); validateScope(scope);
+      const config = readJson(flags.get('--config')!); validateRedirectCheck(config, scope);
+      const result = await usingScopeBudget(scope, flags.get('--scope')!, budget => withCancellation(signal => resumeRedirectCheck(positional!, scope, config, { signal, budget, lang })));
+      console.log(JSON.stringify(result, null, 2));
+      return result.status === 'unresolved' ? 3 : 0;
+    },
+  },
+  {
+    name: 'import-policy',
+    usage: 'import-policy --format hackerone|bugcrowd|intigriti|security-txt --input <file> --out <new-directory>',
+    requiredFlags: ['--format', '--input', '--out'],
+    async execute({ flags }) {
+      const format = flags.get('--format');
+      if (format !== 'hackerone' && format !== 'bugcrowd' && format !== 'intigriti' && format !== 'security-txt') {
+        throw new Error('InvalidUsage');
+      }
+      console.log(JSON.stringify(importPolicyFile(flags.get('--input')!, format as PolicyFormat, flags.get('--out')!), null, 2));
+    },
+  },
+  {
+    name: 'plan-candidates',
+    usage: 'plan-candidates --scope <scope.json> --candidates <candidates.json> --out <new-directory> [--class bola|bfla|property-exposure]',
+    requiredFlags: ['--scope', '--candidates', '--out'],
+    optionalFlags: ['--class'],
+    async execute({ flags }) {
+      const cls = flags.get('--class') ?? 'bola';
+      if (cls !== 'bola' && cls !== 'bfla' && cls !== 'property-exposure') throw new Error('InvalidUsage');
+      console.log(JSON.stringify(planCandidatesFile(flags.get('--scope')!, flags.get('--candidates')!, flags.get('--out')!, { checkClass: cls }), null, 2));
+    },
+  },
+  {
+    name: 'export-submission',
+    usage: 'export-submission <artifact-dir-or-file> --platform hackerone|bugcrowd|ghsa --out <new-file.md> [--run <run-dir>]',
+    positional: true,
+    requiredFlags: ['--platform', '--out'],
+    optionalFlags: ['--run'],
+    async execute({ positional, flags, lang }) {
+      const platform = flags.get('--platform');
+      if (platform !== 'hackerone' && platform !== 'bugcrowd' && platform !== 'ghsa') throw new Error('InvalidUsage');
+      console.log(JSON.stringify(exportSubmission(positional!, platform as SubmissionPlatform, flags.get('--out')!, { runPath: flags.get('--run'), lang }), null, 2));
+    },
+  },
+  {
+    name: 'keygen',
+    usage: 'keygen --out <new-key-directory>',
+    requiredFlags: ['--out'],
+    async execute({ flags }) {
+      console.log(JSON.stringify(generateSigningKeypair(flags.get('--out')!), null, 2));
+    },
+  },
+  {
+    name: 'sign-evidence',
+    usage: 'sign-evidence <target-file-or-dir> --key <private-key.pem> [--out <signature.json>]',
+    positional: true,
+    requiredFlags: ['--key'],
+    optionalFlags: ['--out'],
+    async execute({ positional, flags }) {
+      console.log(JSON.stringify(signEvidence(positional!, flags.get('--key')!, flags.get('--out')), null, 2));
+    },
+  },
+  {
+    name: 'verify-signature',
+    usage: 'verify-signature <target-file-or-dir> --pub <public-key.pem> [--sig <signature.json>]',
+    positional: true,
+    requiredFlags: ['--pub'],
+    optionalFlags: ['--sig'],
+    async execute({ positional, flags }) {
+      console.log(JSON.stringify(verifyEvidenceSignature(positional!, flags.get('--pub')!, flags.get('--sig')), null, 2));
+    },
+  },
+  {
+    name: 'ui',
+    usage: 'ui <directory> [--port <number>] [--out <static-report.html>]',
+    positional: true,
+    optionalFlags: ['--port', '--out'],
+    async execute({ positional, flags, lang }) {
+      if (flags.has('--out')) {
+        console.log(JSON.stringify(exportInspectorHtml(positional!, flags.get('--out')!, lang), null, 2));
+        return;
+      }
+      const rawPort = flags.get('--port');
+      const port = rawPort !== undefined ? Number(rawPort) : 0;
+      if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('InvalidUsage');
+      await withCancellation(async signal => {
+        const srv = await startInspectorServer(positional!, { port, lang, signal });
+        console.log(JSON.stringify({ origin: srv.origin, port: srv.port }, null, 2));
+        await new Promise<void>(resolveWait => {
+          signal.addEventListener('abort', () => resolveWait(), { once: true });
+        });
+        await srv.close();
+      });
+    },
+  },
 ];
 
 export function renderHelp(lang: Lang = 'es'): string {
@@ -755,11 +968,11 @@ export function renderHelp(lang: Lang = 'es'): string {
 
 ${lines}
 
-  Subcommands: bba campaign <open|link|status|policy-review|capture|execute|resume>, bba check <jwt|csrf|race|cache|template|ssrf|browser>, bba study <bundle|plan|run|resume>.
+  Subcommands: bba campaign <open|link|status|policy-review|capture|execute|resume>, bba check <jwt|csrf|race|cache|template|ssrf|browser|graphql|oauth|redirect>, bba study <bundle|plan|run|resume>.
   Global flag: [--lang es|en] (default: es).
 
-ACTIVE: run/resume, capture, campaign-capture/campaign-execute/campaign-resume, hunt, investigate/resume-investigation, browser-check, browser-scenario, jwt-check/resume-jwt, template-check/resume-template-check, ssrf-callback-check/resume-ssrf-callback, cache-check/resume-cache-check, race-check, csrf-check and study-run/resume-study.
-Planning, surface import, evidence evaluation, inspection and export are strictly offline.
+ACTIVE: run/resume, capture, campaign-capture/campaign-execute/campaign-resume, hunt, investigate/resume-investigation, browser-check, browser-scenario, jwt-check/resume-jwt, graphql-check/resume-graphql-check, oauth-check/resume-oauth-check, redirect-check/resume-redirect-check, template-check/resume-template-check, ssrf-callback-check/resume-ssrf-callback, cache-check/resume-cache-check, race-check, csrf-check and study-run/resume-study.
+Planning, surface/policy/candidate import, evidence evaluation, signing, inspection and export are strictly offline.
 Exit codes: 0 completed, 1 error/stopped, 2 invalid usage, 3 partial/unresolved, 130 cancelled.
 `;
   }
@@ -767,11 +980,11 @@ Exit codes: 0 completed, 1 error/stopped, 2 invalid usage, 3 partial/unresolved,
 
 ${lines}
 
-  Subcomandos: bba campaign <open|link|status|policy-review|capture|execute|resume>, bba check <jwt|csrf|race|cache|template|ssrf|browser>, bba study <bundle|plan|run|resume>.
+  Subcomandos: bba campaign <open|link|status|policy-review|capture|execute|resume>, bba check <jwt|csrf|race|cache|template|ssrf|browser|graphql|oauth|redirect>, bba study <bundle|plan|run|resume>.
   Flag global: [--lang es|en] (por defecto: es).
 
-ACTIVOS: run/resume, capture, campaign-capture/campaign-execute/campaign-resume, hunt, investigate/resume-investigation, browser-check, browser-scenario, jwt-check/resume-jwt, template-check/resume-template-check, ssrf-callback-check/resume-ssrf-callback, cache-check/resume-cache-check, race-check, csrf-check y study-run/resume-study.
-Planificación, importación, evaluación de evidencia, inspección y exportación son offline.
+ACTIVOS: run/resume, capture, campaign-capture/campaign-execute/campaign-resume, hunt, investigate/resume-investigation, browser-check, browser-scenario, jwt-check/resume-jwt, graphql-check/resume-graphql-check, oauth-check/resume-oauth-check, redirect-check/resume-redirect-check, template-check/resume-template-check, ssrf-callback-check/resume-ssrf-callback, cache-check/resume-cache-check, race-check, csrf-check y study-run/resume-study.
+Planificación, importación de superficie/políticas/candidatos, evaluación de evidencia, firma, inspección y exportación son offline.
 Exit codes: 0 completo, 1 error/detenido, 2 uso inválido, 3 parcial, 130 cancelado.
 `;
 }

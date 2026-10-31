@@ -1,20 +1,31 @@
 import { writeFileSync } from 'node:fs';
 import { digest } from './contracts.ts';
-import { fields, requestSpec } from './scope.ts';
+import { fields, optionalFields, requestSpec } from './scope.ts';
 import type { Step } from './scope.ts';
 import { inspectSession, readJson, validateSession } from './session.ts';
 import type { Session } from './session.ts';
 import type { Fact } from './observations.ts';
 import type { Lang } from './i18n.ts';
 
-export const semanticClasses = ['bola', 'bfla', 'property-exposure', 'tenant-isolation'] as const;
+export const semanticClasses = ['bola', 'bfla', 'property-exposure', 'tenant-isolation', 'mass-assignment'] as const;
 export type SemanticClass = typeof semanticClasses[number];
 export type Policy = { reference: string } & (
   { boundary: 'owner-only'; ownerFact: string }
   | { boundary: 'role-private'; roleFact: string; baselineRole: string; probeRole: string }
   | { boundary: 'tenant-private'; tenantFact: string; resourceTenantFact: string });
-export type SemanticCheck = { id: string; class: SemanticClass; control: string; baseline: string; probe: string;
-  identities: { baseline: string; probe: string; fact: string }; protectedFact: string; policy: Policy };
+export type SemanticCheck = {
+  id: string;
+  class: SemanticClass;
+  mode?: 'read' | 'write';
+  control: string;
+  baseline: string;
+  probe: string;
+  verifyAfter?: string;
+  restore?: string;
+  identities: { baseline: string; probe: string; fact: string };
+  protectedFact: string;
+  policy: Policy;
+};
 export type SemanticChecks = { schemaVersion: 1; checks: SemanticCheck[] };
 export type SemanticFinding = { id: string; class: SemanticClass; url: string; status: 'confirmed' | 'not-reproduced' | 'unresolved';
   reason: string; policy: Policy; evidence: string[]; signature: string };
@@ -26,7 +37,7 @@ export function validatePolicy(value: unknown, kind: SemanticClass): asserts val
   if (!value || typeof value !== 'object') throw new Error('Invalid semantic policy');
   const p = value as Record<string, any>;
   if (typeof p.reference !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9 ._:/-]{0,199}$/.test(p.reference)) throw new Error('Invalid semantic policy reference');
-  if (kind === 'bola') {
+  if (kind === 'bola' || (kind === 'mass-assignment' && p.boundary === 'owner-only')) {
     fields(p, ['reference', 'boundary', 'ownerFact']);
     if (p.boundary !== 'owner-only' || !name(p.ownerFact)) throw new Error('Invalid owner policy');
   } else if (kind === 'tenant-isolation') {
@@ -44,40 +55,87 @@ export function validateSemanticChecks(value: unknown, session: Session): assert
   const steps = new Map(session.plan.steps.map((s, i) => [s.id, { ...s, index: i }]));
   const ids = new Set<string>();
   for (const check of value.checks) {
-    fields(check, ['id', 'class', 'control', 'baseline', 'probe', 'identities', 'protectedFact', 'policy']);
-    if (!name(check.id) || ids.has(check.id) || !semanticClasses.includes(check.class) || !name(check.protectedFact)) throw new Error('Invalid semantic check');
+    optionalFields(check, ['id', 'class', 'control', 'baseline', 'probe', 'identities', 'protectedFact', 'policy'], ['mode', 'verifyAfter', 'restore']);
+    const mode = check.mode ?? 'read';
+    if (!name(check.id) || ids.has(check.id) || !semanticClasses.includes(check.class) || !name(check.protectedFact)
+      || (mode !== 'read' && mode !== 'write')) throw new Error('Invalid semantic check');
     ids.add(check.id);
     fields(check.identities, ['baseline', 'probe', 'fact']);
     if (!name(check.identities.fact)) throw new Error('Invalid identity fact');
     const [control, baseline, probe, identityA, identityB] = [check.control, check.baseline, check.probe, check.identities.baseline, check.identities.probe].map(id => steps.get(id));
-    if (!control || !baseline || !probe || !identityA || !identityB
-      || new Set([control.id, baseline.id, probe.id, identityA.id, identityB.id]).size !== 5) throw new Error('Five distinct evidence steps are required');
-    if ([control, baseline, probe, identityA, identityB].some(s => s.method !== 'GET')) throw new Error('Semantic checks require read-only GET comparisons');
-    if (control.credentialEnv !== null || !baseline.credentialEnv || !probe.credentialEnv || baseline.credentialEnv === probe.credentialEnv
-      || identityA.credentialEnv !== baseline.credentialEnv || identityB.credentialEnv !== probe.credentialEnv) throw new Error('Semantic identities do not match request credentials');
-    if (identityA.url !== identityB.url || digest(requestSpec(identityA)) !== digest(requestSpec(identityB))
-      || new URL(identityA.url).origin !== new URL(baseline.url).origin
-      || Math.max(identityA.index, identityB.index) >= Math.min(control.index, baseline.index, probe.index)) throw new Error('Identity controls must precede comparisons on the same origin and identity endpoint');
-    if (control.url !== baseline.url || baseline.url !== probe.url || digest(requestSpec(control)) !== digest(requestSpec(baseline))
-      || digest(requestSpec(baseline)) !== digest(requestSpec(probe))) throw new Error('Semantic comparisons require the same request');
+    if (!control || !baseline || !probe || !identityA || !identityB) throw new Error('Five distinct evidence steps are required');
     const requireFact = (s: Step, field: string) => { if (!name(field) || !projection(s, field)) throw new Error('Semantic proof requires declared projections'); };
     requireFact(identityA, check.identities.fact); requireFact(identityB, check.identities.fact);
     if (projection(identityA, check.identities.fact)!.pointer !== projection(identityB, check.identities.fact)!.pointer) throw new Error('Identity selectors differ');
-    requireFact(baseline, check.protectedFact); requireFact(probe, check.protectedFact);
-    if (projection(baseline, check.protectedFact)!.pointer !== projection(probe, check.protectedFact)!.pointer) throw new Error('Protected selectors differ');
     const p = check.policy;
     validatePolicy(p, check.class);
-    if (p.boundary === 'owner-only') {
-      requireFact(baseline, p.ownerFact); requireFact(probe, p.ownerFact);
-      if (projection(baseline, p.ownerFact)!.pointer !== projection(probe, p.ownerFact)!.pointer) throw new Error('Owner selectors differ');
-    } else if (p.boundary === 'tenant-private') {
-      for (const s of [identityA, identityB]) requireFact(s, p.tenantFact);
-      for (const s of [baseline, probe]) requireFact(s, p.resourceTenantFact);
-      if (projection(identityA, p.tenantFact)!.pointer !== projection(identityB, p.tenantFact)!.pointer
-        || projection(baseline, p.resourceTenantFact)!.pointer !== projection(probe, p.resourceTenantFact)!.pointer) throw new Error('Tenant selectors differ');
+
+    if (mode === 'read') {
+      if (check.verifyAfter !== undefined || check.restore !== undefined) throw new Error('Read checks cannot declare verifyAfter or restore');
+      if (new Set([control.id, baseline.id, probe.id, identityA.id, identityB.id]).size !== 5) throw new Error('Five distinct evidence steps are required');
+      if ([control, baseline, probe, identityA, identityB].some(s => s.method !== 'GET')) throw new Error('Semantic checks require read-only GET comparisons');
+      if (control.credentialEnv !== null || !baseline.credentialEnv || !probe.credentialEnv || baseline.credentialEnv === probe.credentialEnv
+        || identityA.credentialEnv !== baseline.credentialEnv || identityB.credentialEnv !== probe.credentialEnv) throw new Error('Semantic identities do not match request credentials');
+      if (identityA.url !== identityB.url || digest(requestSpec(identityA)) !== digest(requestSpec(identityB))
+        || new URL(identityA.url).origin !== new URL(baseline.url).origin
+        || Math.max(identityA.index, identityB.index) >= Math.min(control.index, baseline.index, probe.index)) throw new Error('Identity controls must precede comparisons on the same origin and identity endpoint');
+      if (control.url !== baseline.url || baseline.url !== probe.url || digest(requestSpec(control)) !== digest(requestSpec(baseline))
+        || digest(requestSpec(baseline)) !== digest(requestSpec(probe))) throw new Error('Semantic comparisons require the same request');
+      requireFact(baseline, check.protectedFact); requireFact(probe, check.protectedFact);
+      if (projection(baseline, check.protectedFact)!.pointer !== projection(probe, check.protectedFact)!.pointer) throw new Error('Protected selectors differ');
+      if (p.boundary === 'owner-only') {
+        requireFact(baseline, p.ownerFact); requireFact(probe, p.ownerFact);
+        if (projection(baseline, p.ownerFact)!.pointer !== projection(probe, p.ownerFact)!.pointer) throw new Error('Owner selectors differ');
+      } else if (p.boundary === 'tenant-private') {
+        for (const s of [identityA, identityB]) requireFact(s, p.tenantFact);
+        for (const s of [baseline, probe]) requireFact(s, p.resourceTenantFact);
+        if (projection(identityA, p.tenantFact)!.pointer !== projection(identityB, p.tenantFact)!.pointer
+          || projection(baseline, p.resourceTenantFact)!.pointer !== projection(probe, p.resourceTenantFact)!.pointer) throw new Error('Tenant selectors differ');
+      } else {
+        for (const s of [identityA, identityB]) requireFact(s, p.roleFact);
+        if (projection(identityA, p.roleFact)!.pointer !== projection(identityB, p.roleFact)!.pointer) throw new Error('Role selectors differ');
+      }
     } else {
-      for (const s of [identityA, identityB]) requireFact(s, p.roleFact);
-      if (projection(identityA, p.roleFact)!.pointer !== projection(identityB, p.roleFact)!.pointer) throw new Error('Role selectors differ');
+      if (typeof check.verifyAfter !== 'string' || !name(check.verifyAfter)) throw new Error('Write checks require verifyAfter step');
+      const verifyAfter = steps.get(check.verifyAfter);
+      const restore = check.restore !== undefined ? (name(check.restore) ? steps.get(check.restore) : undefined) : undefined;
+      if (!verifyAfter || (check.restore !== undefined && !restore)) throw new Error('Invalid write verification or restore step');
+      const allIds = [identityA.id, identityB.id, baseline.id, control.id, probe.id, verifyAfter.id, ...(restore ? [restore.id] : [])];
+      if (new Set(allIds).size !== allIds.length) throw new Error('Write semantic checks require distinct steps');
+      if ([identityA, identityB, baseline, verifyAfter].some(s => s.method !== 'GET')
+        || !['POST', 'PUT', 'PATCH', 'DELETE'].includes(probe.method) || control.method !== probe.method) {
+        throw new Error('Write semantic checks require GET state reads and matching POST/PUT/PATCH/DELETE mutations');
+      }
+      if (control.credentialEnv !== null || !baseline.credentialEnv || !probe.credentialEnv || baseline.credentialEnv === probe.credentialEnv
+        || identityA.credentialEnv !== baseline.credentialEnv || identityB.credentialEnv !== probe.credentialEnv
+        || verifyAfter.credentialEnv !== baseline.credentialEnv || (restore && restore.credentialEnv !== baseline.credentialEnv)) {
+        throw new Error('Semantic identities do not match write request credentials');
+      }
+      if (identityA.url !== identityB.url || digest(requestSpec(identityA)) !== digest(requestSpec(identityB))
+        || new URL(identityA.url).origin !== new URL(baseline.url).origin
+        || new URL(probe.url).origin !== new URL(baseline.url).origin
+        || Math.max(identityA.index, identityB.index) >= Math.min(baseline.index, control.index, probe.index, verifyAfter.index)) {
+        throw new Error('Identity controls must precede write comparisons on the same origin');
+      }
+      if (baseline.index >= probe.index || probe.index >= verifyAfter.index || (restore && verifyAfter.index >= restore.index)) {
+        throw new Error('Write semantic check requires baseline read before probe and verifyAfter read after probe');
+      }
+      if (baseline.url !== verifyAfter.url || digest(requestSpec(baseline)) !== digest(requestSpec(verifyAfter))
+        || control.url !== probe.url || digest(requestSpec(control)) !== digest(requestSpec(probe))) {
+        throw new Error('Write semantic check requires matching state reads and matching mutation requests');
+      }
+      requireFact(baseline, check.protectedFact); requireFact(verifyAfter, check.protectedFact);
+      if (projection(baseline, check.protectedFact)!.pointer !== projection(verifyAfter, check.protectedFact)!.pointer) throw new Error('Protected selectors differ');
+      if (p.boundary === 'owner-only') {
+        requireFact(baseline, p.ownerFact);
+      } else if (p.boundary === 'tenant-private') {
+        for (const s of [identityA, identityB]) requireFact(s, p.tenantFact);
+        requireFact(baseline, p.resourceTenantFact);
+        if (projection(identityA, p.tenantFact)!.pointer !== projection(identityB, p.tenantFact)!.pointer) throw new Error('Tenant selectors differ');
+      } else {
+        for (const s of [identityA, identityB]) requireFact(s, p.roleFact);
+        if (projection(identityA, p.roleFact)!.pointer !== projection(identityB, p.roleFact)!.pointer) throw new Error('Role selectors differ');
+      }
     }
   }
 }
@@ -87,12 +145,21 @@ const equal = (a: Fact | undefined, b: Fact | undefined) => !!a?.meaningful && !
 export function evaluateSemantic(session: Session, value: unknown): SemanticResult {
   validateSession(session); validateSemanticChecks(value, session);
   const response = (id: string) => session.attempts.find(a => a.stepId === id && a.outcome === 'succeeded')?.response;
-  const fact = (id: string, name: string) => response(id)?.facts?.find(f => f.name === name);
+  const fact = (id: string, fieldName: string) => response(id)?.facts?.find(f => f.name === fieldName);
   const findings = value.checks.map((c): SemanticFinding => {
-    const url = session.plan.steps.find(s => s.id === c.baseline)!.url;
-    const evidence = [c.identities.baseline, c.identities.probe, c.control, c.baseline, c.probe].map(id => session.id + ':' + id);
+    const mode = c.mode ?? 'read';
+    const probeStep = session.plan.steps.find(s => s.id === c.probe)!;
+    const baselineStep = session.plan.steps.find(s => s.id === c.baseline)!;
+    const url = mode === 'write' ? probeStep.url : baselineStep.url;
+    const stepList = mode === 'write'
+      ? [c.identities.baseline, c.identities.probe, c.baseline, c.control, c.probe, c.verifyAfter!, ...(c.restore ? [c.restore] : [])]
+      : [c.identities.baseline, c.identities.probe, c.control, c.baseline, c.probe];
+    const evidence = stepList.map(id => session.id + ':' + id);
     const result: SemanticFinding = { id: c.id, class: c.class, url, status: 'unresolved', reason: 'Required evidence is incomplete.', policy: c.policy, evidence,
-      signature: digest({ class: c.class, url, policy: c.policy, pointer: session.plan.steps.find(s => s.id === c.baseline)!.observe!.find(p => p.name === c.protectedFact)!.pointer }) };
+      signature: digest({ class: c.class, mode, url, policy: c.policy, pointer: baselineStep.observe!.find(p => p.name === c.protectedFact)!.pointer }) };
+    if (mode === 'read') {
+      result.signature = digest({ class: c.class, url, policy: c.policy, pointer: baselineStep.observe!.find(p => p.name === c.protectedFact)!.pointer });
+    }
     const a = c.identities.baseline, b = c.identities.probe;
     const identityA = fact(a, c.identities.fact), identityB = fact(b, c.identities.fact);
     if (response(a)?.status !== 200 || response(b)?.status !== 200 || !scalar(identityA) || !scalar(identityB)
@@ -107,10 +174,33 @@ export function evaluateSemantic(session: Session, value: unknown): SemanticResu
     }
     if (!response(c.control) || !response(c.baseline) || !response(c.probe)) return result;
     if (![401, 403, 404].includes(response(c.control)!.status)) { result.reason = 'The anonymous boundary was not established.'; return result; }
-    const protectedA = fact(c.baseline, c.protectedFact), protectedB = fact(c.probe, c.protectedFact);
+    const protectedA = fact(c.baseline, c.protectedFact);
     if (response(c.baseline)!.status !== 200 || !protectedA?.meaningful) { result.reason = 'The authorized protected-field baseline was not established.'; return result; }
     if (p.boundary === 'owner-only' && !equal(fact(c.baseline, p.ownerFact), identityA)) { result.reason = 'Baseline ownership did not match the server identity.'; return result; }
     if (p.boundary === 'tenant-private' && !equal(fact(c.baseline, p.resourceTenantFact), fact(a, p.tenantFact))) { result.reason = 'Baseline resource tenant did not match the server tenant.'; return result; }
+
+    if (mode === 'write') {
+      const afterResp = response(c.verifyAfter!);
+      if (!afterResp) return result;
+      const protectedAfter = fact(c.verifyAfter!, c.protectedFact);
+      const probeStatus = response(c.probe)!.status;
+      if ([401, 403, 404, 422].includes(probeStatus) && afterResp.status === 200 && equal(protectedA, protectedAfter)) {
+        result.status = 'not-reproduced';
+        result.reason = 'The controlled restricted identity write was denied and the protected resource state remained unchanged.';
+        return result;
+      }
+      if ([200, 201, 202, 204].includes(probeStatus)
+        && ((afterResp.status === 200 && !!protectedAfter?.meaningful && !equal(protectedA, protectedAfter))
+          || (probeStep.method === 'DELETE' && afterResp.status === 404))) {
+        result.status = 'confirmed';
+        result.reason = 'The controlled restricted identity mutated the protected resource state verified by before/after authorized reads while anonymous mutation was denied.';
+        return result;
+      }
+      result.reason = 'Write probe outcome or before/after state verification was inconclusive.';
+      return result;
+    }
+
+    const protectedB = fact(c.probe, c.protectedFact);
     if ([403, 404].includes(response(c.probe)!.status)) { result.status = 'not-reproduced'; result.reason = 'The controlled restricted identity was denied for this comparison.'; return result; }
     if (response(c.probe)!.status !== 200) { result.reason = 'Probe failed or authentication may have expired.'; return result; }
     if (protectedB?.kind === 'missing') { result.status = 'not-reproduced'; result.reason = 'This protected JSON property was absent; other fields remain untested.'; return result; }
@@ -122,7 +212,7 @@ export function evaluateSemantic(session: Session, value: unknown): SemanticResu
   });
   return { schemaVersion: 1, sessionId: session.id, scopeDigest: session.scopeDigest, checksDigest: digest(value), findings,
     limitations: ['Policy semantics, controlled-account ownership and absence of shared grants are operator preconditions.',
-      'This confirms only the recorded read exposure. It does not establish writes, other fields, broader coverage or bounty eligibility.',
+      'This confirms only the recorded read or disposable-resource write comparison. It does not establish other fields, broader coverage or bounty eligibility.',
       'Field digests and server-identity/role/tenant controls are retained; raw values and credentials are not. Low-entropy digests can be guessed.',
       'Identity controls describe the observed requests; sessions and application state must remain consistent between requests.'] };
 }

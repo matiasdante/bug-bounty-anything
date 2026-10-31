@@ -14,8 +14,21 @@ import { digest } from './contracts.ts';
 import type { ProgramBudget } from './budget.ts';
 import type { Lang } from './i18n.ts';
 
+export type ProfileRule = {
+  class: SemanticClass;
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+  origin: string;
+  pathPrefix: string;
+  stateUrl?: string;
+  protectedPointer: string;
+  subjectPointer: string | null;
+  query: NonNullable<RequestSpec['query']>;
+  body?: RequestSpec['body'];
+  policy: Policy;
+};
+
 export type Profile = { schemaVersion: 1; accounts: [string, string]; identity: { url: string; fact: string; observe: Projection[] };
-  rules: { class: SemanticClass; origin: string; pathPrefix: string; protectedPointer: string; subjectPointer: string | null; query: NonNullable<RequestSpec['query']>; policy: Policy }[];
+  rules: ProfileRule[];
   bindings?: { entryId: string; url: string }[] };
 
 export function compileInvestigation(scope: Scope, bundle: unknown, input: unknown) {
@@ -42,9 +55,22 @@ export function compileInvestigation(scope: Scope, bundle: unknown, input: unkno
     }
   }
   for (const r of profile.rules) {
-    fields(r, ['class', 'origin', 'pathPrefix', 'protectedPointer', 'subjectPointer', 'query', 'policy']);
-    if (!semanticClasses.includes(r.class) || typeof r.origin !== 'string' || typeof r.pathPrefix !== 'string'
+    optionalFields(r, ['class', 'origin', 'pathPrefix', 'protectedPointer', 'subjectPointer', 'query', 'policy'], ['method', 'body', 'stateUrl']);
+    const ruleMethod = r.method ?? 'GET';
+    if (!semanticClasses.includes(r.class) || !['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(ruleMethod)
+      || typeof r.origin !== 'string' || typeof r.pathPrefix !== 'string'
       || strictUrl(r.origin + r.pathPrefix).origin !== r.origin || !Array.isArray(r.query) || r.query.length > 20) throw new Error('Invalid profile rule');
+    if (ruleMethod === 'GET' && (r.body !== undefined || r.stateUrl !== undefined)) throw new Error('GET profile rules cannot declare body or stateUrl');
+    if (r.body !== undefined) {
+      fields(r.body, ['format', 'valueEnv']);
+      if (!['json', 'form', 'text'].includes(r.body.format) || typeof r.body.valueEnv !== 'string' || !/^BBA_BODY_[A-Z0-9_]{1,50}$/.test(r.body.valueEnv)) {
+        throw new Error('Invalid profile body binding');
+      }
+    }
+    if (r.stateUrl !== undefined) {
+      const parsedState = assertAuthorized(scope, r.stateUrl);
+      if (parsedState.origin !== r.origin) throw new Error('Profile stateUrl must share rule origin');
+    }
     const queryNames = new Set<string>();
     for (const q of r.query) {
       fields(q, ['name', 'valueEnv']);
@@ -67,27 +93,46 @@ export function compileInvestigation(scope: Scope, bundle: unknown, input: unkno
     if (!url) { record(null, 'Concrete controlled URL required for template or unknown origin.'); continue; }
     try { assertAuthorized(scope, url); } catch { record(null, 'Outside scope or excluded.'); continue; }
     if (url === profile.identity.url) { record(null, 'Identity endpoint used for controls; its other classes remain untested.'); continue; }
-    if (e.method !== 'GET') { record(null, 'Semantic generators currently cover read-only GET.'); continue; }
+    if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(e.method)) { record(null, 'Semantic generators cover GET and disposable-resource POST/PUT/PATCH/DELETE.'); continue; }
     const location = strictUrl(url);
-    const matching = profile.rules.filter(r => r.origin === location.origin && matchesPathPrefix(r.pathPrefix, location.pathname));
-    if (!matching.length) { record(null, 'No declared business-boundary rule applies.'); continue; }
+    const matching = profile.rules.filter(r => (r.method ?? 'GET') === e.method && r.origin === location.origin && matchesPathPrefix(r.pathPrefix, location.pathname));
+    if (!matching.length) {
+      record(null, e.method !== 'GET' ? 'No declared write business-boundary rule applies.' : 'No declared business-boundary rule applies.');
+      continue;
+    }
     for (const rule of matching) {
+      const ruleMethod = rule.method ?? 'GET';
       const key = digest({ url, rule }), id = 'h-' + key.slice(0, 24);
       if (used.has(key)) { record(id, 'Same hypothesis reuses its existing comparison.'); continue; }
       if (e.parameters.some(p => p.location === 'query' && !rule.query.some(q => q.name === p.name))) { record(null, 'Recorded query parameters need explicit input bindings.'); continue; }
-      if (plan.steps.length + 3 > Math.min(scope.limits.maxRequests, 100)) { record(null, 'Insufficient request budget for another complete comparison.'); continue; }
+      const neededSteps = ruleMethod === 'GET' ? 3 : 4;
+      if (plan.steps.length + neededSteps > Math.min(scope.limits.maxRequests, 100)) { record(null, 'Insufficient request budget for another complete comparison.'); continue; }
       const observe: Projection[] = [{ name: 'protected', pointer: rule.protectedPointer }];
       if (rule.policy.boundary === 'owner-only' || rule.policy.boundary === 'tenant-private') {
         if (rule.subjectPointer === null) throw new Error('Owner and tenant policies require a subject selector');
         observe.push({ name: rule.policy.boundary === 'owner-only' ? rule.policy.ownerFact : rule.policy.resourceTenantFact, pointer: rule.subjectPointer });
       }
-      const steps: Step[] = [null, profile.accounts[0], profile.accounts[1]].map((credentialEnv, i) => ({
-        id: id + ['-control', '-baseline', '-probe'][i], method: 'GET', url, credentialEnv, ...(rule.query.length ? { query: rule.query } : {}), ...(i ? { observe } : {}),
-      }));
-      try { validatePlan({ schemaVersion: 1, steps }, scope); } catch { record(null, 'Request inputs or method are not permitted by scope.'); continue; }
-      plan.steps.push(...steps);
-      checks.checks.push({ id, class: rule.class, control: steps[0].id, baseline: steps[1].id, probe: steps[2].id,
-        identities: { baseline: 'identity-a', probe: 'identity-b', fact: profile.identity.fact }, protectedFact: 'protected', policy: rule.policy });
+      if (ruleMethod === 'GET') {
+        const steps: Step[] = [null, profile.accounts[0], profile.accounts[1]].map((credentialEnv, i) => ({
+          id: id + ['-control', '-baseline', '-probe'][i], method: 'GET', url, credentialEnv, ...(rule.query.length ? { query: rule.query } : {}), ...(i ? { observe } : {}),
+        }));
+        try { validatePlan({ schemaVersion: 1, steps }, scope); } catch { record(null, 'Request inputs or method are not permitted by scope.'); continue; }
+        plan.steps.push(...steps);
+        checks.checks.push({ id, class: rule.class, control: steps[0].id, baseline: steps[1].id, probe: steps[2].id,
+          identities: { baseline: 'identity-a', probe: 'identity-b', fact: profile.identity.fact }, protectedFact: 'protected', policy: rule.policy });
+      } else {
+        const stateUrl = rule.stateUrl ?? url;
+        const steps: Step[] = [
+          { id: id + '-baseline', method: 'GET', url: stateUrl, credentialEnv: profile.accounts[0], observe },
+          { id: id + '-control', method: ruleMethod, url, credentialEnv: null, ...(rule.query.length ? { query: rule.query } : {}), ...(rule.body ? { body: rule.body } : {}) },
+          { id: id + '-probe', method: ruleMethod, url, credentialEnv: profile.accounts[1], ...(rule.query.length ? { query: rule.query } : {}), ...(rule.body ? { body: rule.body } : {}) },
+          { id: id + '-verify', method: 'GET', url: stateUrl, credentialEnv: profile.accounts[0], observe: [{ name: 'protected', pointer: rule.protectedPointer }] },
+        ];
+        try { validatePlan({ schemaVersion: 1, steps }, scope); } catch { record(null, 'Request inputs or method are not permitted by scope.'); continue; }
+        plan.steps.push(...steps);
+        checks.checks.push({ id, class: rule.class, mode: 'write', control: steps[1].id, baseline: steps[0].id, probe: steps[2].id, verifyAfter: steps[3].id,
+          identities: { baseline: 'identity-a', probe: 'identity-b', fact: profile.identity.fact }, protectedFact: 'protected', policy: rule.policy });
+      }
       used.add(key); record(id, 'Planned from recorded surface and operator-declared policy.');
     }
   }

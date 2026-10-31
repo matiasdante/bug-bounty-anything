@@ -7,14 +7,38 @@ import { resolveRequest, bindInputs } from './requests.ts';
 import { projectJson } from './observations.ts';
 import type { Scope } from './scope.ts';
 import { withSession } from './session.ts';
-import type { Session, Attempt } from './session.ts';
+import type { Session, Attempt, RedirectClass } from './session.ts';
 import { validateHeaderEnvironment } from './headers.ts';
 import type { ProgramBudget } from './budget.ts';
+
+export function classifyRedirectLocation(requestUrl: string, locationHeader: string | undefined): {
+  redirectClass: RedirectClass;
+  redirectOrigin: string | null;
+} | null {
+  if (locationHeader === undefined) return null;
+  if (!locationHeader || locationHeader.length > 2048 || /[\x00-\x1f\x7f]/.test(locationHeader)) {
+    return { redirectClass: 'invalid', redirectOrigin: null };
+  }
+  try {
+    const base = new URL(requestUrl);
+    const resolved = new URL(locationHeader, base);
+    if (!['http:', 'https:'].includes(resolved.protocol) || resolved.username || resolved.password) {
+      return { redirectClass: 'invalid', redirectOrigin: null };
+    }
+    return {
+      redirectClass: resolved.origin === base.origin ? 'same-origin' : 'external',
+      redirectOrigin: resolved.origin,
+    };
+  } catch {
+    return { redirectClass: 'invalid', redirectOrigin: null };
+  }
+}
 
 export async function executeSession(folder: string, scope: Scope, options: {
   signal?: AbortSignal; credentials?: Record<string, string | undefined>;
   stopWhen?: (session: Session) => boolean;
   budget?: ProgramBudget;
+  allowRedirectObservation?: boolean;
 } = {}): Promise<Session> {
   validateScope(scope);
   if (scope.budgetId && !options.budget) throw new Error('Shared program budget runtime is required');
@@ -74,10 +98,18 @@ export async function executeSession(folder: string, scope: Scope, options: {
           ...(step.credentialEnv ? credentialFor(step.credentialEnv, tokens.get(step.id)!) : {}), signal: options.signal, remainingMs: Math.min(deadline - Date.now(), options.budget?.remainingMs() ?? Infinity), environment: options.credentials,
           request: requestSpec(step),
         });
-        attempt.response = { status: response.status, bytes: response.body.length,
+        const redirectMeta = response.status >= 300 && response.status < 400
+          ? classifyRedirectLocation(step.url, response.location)
+          : null;
+        attempt.response = {
+          status: response.status,
+          bytes: response.body.length,
           sha256: createHash('sha256').update(response.body).digest('hex'),
-          ...(step.observe ? { facts: projectJson(response.body, response.contentType, step.observe) } : {}) };
-        const reason = response.status >= 300 && response.status < 400 ? 'redirect'
+          ...(step.observe ? { facts: projectJson(response.body, response.contentType, step.observe) } : {}),
+          ...(redirectMeta ? redirectMeta : {}),
+        };
+        const isRedirect = response.status >= 300 && response.status < 400;
+        const reason = isRedirect && !options.allowRedirectObservation ? 'redirect'
           : response.status === 429 ? 'rate-limited' : response.status >= 500 ? 'server-error' : null;
         attempt.endedAt = new Date().toISOString(); attempt.outcome = reason ? 'error' : 'succeeded'; attempt.reason = reason;
         if (reason) { state.status = 'stopped'; state.stopReason = reason; }

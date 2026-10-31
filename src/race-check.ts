@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { scopedRequest, credentialFor } from './http.ts';
+import { scopedHttp2Pair, scopedRequest, credentialFor } from './http.ts';
 import { digest } from './contracts.ts';
-import { assertRequestAllowed, fields, validateScope } from './scope.ts';
+import { assertRequestAllowed, optionalFields, validateScope } from './scope.ts';
 import type { Scope } from './scope.ts';
 import { projectJson } from './observations.ts';
 import { validateHeaderEnvironment } from './headers.ts';
@@ -15,15 +15,16 @@ import type { Lang } from './i18n.ts';
 export type RaceCheck = { schemaVersion: 1; class: 'single-use-race'; policyReference: string;
   credentialEnv: string; actionUrl: string; actionField: string;
   controlResourceId: string; raceResourceId: string; controlStateUrl: string; raceStateUrl: string;
-  countPointer: string };
+  countPointer: string; transport?: 'http1' | 'http2' };
 const bodyRefs = ['BBA_BODY_RACE_CONTROL', 'BBA_BODY_RACE_PROBE'] as const;
 type Reply = { status: number; factDigest: string | null; factKind: string | null; startedAt: number; endedAt: number };
 
 export function validateRaceCheck(value: unknown, scope: Scope): asserts value is RaceCheck {
   validateScope(scope);
-  fields(value, ['schemaVersion', 'class', 'policyReference', 'credentialEnv', 'actionUrl', 'actionField',
-    'controlResourceId', 'raceResourceId', 'controlStateUrl', 'raceStateUrl', 'countPointer']);
+  optionalFields(value, ['schemaVersion', 'class', 'policyReference', 'credentialEnv', 'actionUrl', 'actionField',
+    'controlResourceId', 'raceResourceId', 'controlStateUrl', 'raceStateUrl', 'countPointer'], ['transport']);
   if (value.schemaVersion !== 1 || value.class !== 'single-use-race'
+    || (value.transport !== undefined && value.transport !== 'http1' && value.transport !== 'http2')
     || typeof value.policyReference !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9 ._:/-]{0,199}$/.test(value.policyReference)
     || typeof value.credentialEnv !== 'string' || !/^BBA_(TOKEN|COOKIE)_[A-Z0-9_]{1,50}$/.test(value.credentialEnv)
     || typeof value.actionField !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(value.actionField)
@@ -69,12 +70,12 @@ export async function raceCheck(folder: string, scope: Scope, config: RaceCheck,
       const ordinal = ++used;
       append({ event: 'reserved', ordinal, stepId, at: new Date().toISOString() });
       if (options.budget && !preReserved) { await options.budget.beforeRequest(reference, options.signal); sharedReserved = true; }
-      const sentAt = Date.now();
+      const sentAt = performance.timeOrigin + performance.now();
       const r = await scopedRequest(scope, url, { ...credential, request: spec, environment: env, signal: options.signal,
         remainingMs: Math.min(deadline - Date.now(), options.budget?.remainingMs() ?? Infinity) });
       const fact = method === 'GET' ? projectJson(r.body, r.contentType, [{ name: 'count', pointer: config.countPointer }])[0] : null;
       const reply: Reply = { status: r.status, factDigest: fact?.sha256 ?? null, factKind: fact?.kind ?? null,
-        startedAt: sentAt, endedAt: Date.now() };
+        startedAt: sentAt, endedAt: performance.timeOrigin + performance.now() };
       replies.set(stepId, reply);
       append({ event: 'response', ordinal, stepId, status: r.status, bodyDigest: createHash('sha256').update(r.body).digest('hex'),
         factDigest: reply.factDigest, factKind: reply.factKind, startedAt: sentAt, endedAt: reply.endedAt });
@@ -96,10 +97,41 @@ export async function raceCheck(folder: string, scope: Scope, config: RaceCheck,
     await send('race-before', config.raceStateUrl, 'GET');
     if (!count('race-before', 0)) throw new Error('control-precondition');
     const pair: [string, string] = [id + ':race-a', id + ':race-b'];
-    if (options.budget) await options.budget.beforeConcurrentPair(pair, options.signal);
-    const outcomes = await Promise.allSettled([send('race-a', config.actionUrl, 'POST', bodyRefs[1], !!options.budget),
-      send('race-b', config.actionUrl, 'POST', bodyRefs[1], !!options.budget)]);
-    if (outcomes.some(outcome => outcome.status === 'rejected')) throw new Error('concurrent-request-failed');
+    if (config.transport === 'http2') {
+      if (options.signal?.aborted || Date.now() >= deadline || used + 2 > 7) throw new Error('cancelled-or-budget');
+      const ordA = ++used, ordB = ++used;
+      const nowIso = new Date().toISOString();
+      append({ event: 'reserved', ordinal: ordA, stepId: 'race-a', at: nowIso, transport: 'http2' });
+      append({ event: 'reserved', ordinal: ordB, stepId: 'race-b', at: nowIso, transport: 'http2' });
+      let pairReserved = false;
+      try {
+        if (options.budget) { await options.budget.beforeConcurrentPair(pair, options.signal); pairReserved = true; }
+        const spec = { method: 'POST' as const, body: { format: 'json' as const, valueEnv: bodyRefs[1] } };
+        const [resA, resB] = await scopedHttp2Pair(scope, config.actionUrl, [spec, spec], {
+          ...credential,
+          environment: env,
+          signal: options.signal,
+          remainingMs: Math.min(deadline - Date.now(), options.budget?.remainingMs() ?? Infinity),
+        });
+        for (const [stepId, ord, r] of [['race-a', ordA, resA], ['race-b', ordB, resB]] as const) {
+          const reply: Reply = { status: r.status, factDigest: null, factKind: null, startedAt: r.startedAt, endedAt: r.endedAt };
+          replies.set(stepId, reply);
+          append({ event: 'response', ordinal: ord, stepId, status: r.status, bodyDigest: createHash('sha256').update(r.body).digest('hex'),
+            factDigest: null, factKind: null, startedAt: r.startedAt, endedAt: r.endedAt, transport: 'http2' });
+          if ((r.status >= 300 && r.status < 400) || r.status === 429 || r.status >= 500) throw new Error('unsafe-response');
+        }
+      } finally {
+        if (pairReserved && options.budget) {
+          options.budget.complete(pair[0]);
+          options.budget.complete(pair[1]);
+        }
+      }
+    } else {
+      if (options.budget) await options.budget.beforeConcurrentPair(pair, options.signal);
+      const outcomes = await Promise.allSettled([send('race-a', config.actionUrl, 'POST', bodyRefs[1], !!options.budget),
+        send('race-b', config.actionUrl, 'POST', bodyRefs[1], !!options.budget)]);
+      if (outcomes.some(outcome => outcome.status === 'rejected')) throw new Error('concurrent-request-failed');
+    }
     await send('race-after', config.raceStateUrl, 'GET');
   } catch (error) { stopped = options.signal?.aborted ? 'cancelled' : error instanceof Error ? error.message : 'execution-failed'; }
   finally { append({ event: 'finish', requests: used, stopped }); journal.close(); }

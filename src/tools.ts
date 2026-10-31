@@ -27,6 +27,16 @@ import { ssrfCallbackCheck, resumeSsrfCallbackCheck, validateSsrfCallback } from
 import { cacheCheck, resumeCacheCheck, validateCacheCheck } from './cache-check.ts';
 import { raceCheck, validateRaceCheck } from './race-check.ts';
 import { csrfCheck, validateCsrfCheck } from './csrf-check.ts';
+import { graphqlCheck, resumeGraphqlCheck, validateGraphqlCheck } from './graphql-check.ts';
+import { oauthCheck, resumeOauthCheck, validateOauthCheck } from './oauth-check.ts';
+import { redirectCheck, resumeRedirectCheck, validateRedirectCheck } from './redirect-check.ts';
+import { importPolicyFile } from './policy-import.ts';
+import type { PolicyFormat } from './policy-import.ts';
+import { planCandidatesFile } from './candidate-planner.ts';
+import { exportSubmission } from './report-platform.ts';
+import type { SubmissionPlatform } from './report-platform.ts';
+import { generateSigningKeypair, signEvidence, verifyEvidenceSignature } from './signing.ts';
+import { exportInspectorHtml } from './ui.ts';
 import { normalizePlatformPath } from './paths.ts';
 import { enm, obj, str } from './schema.ts';
 import type { JsonSchema, Validator } from './schema.ts';
@@ -217,10 +227,10 @@ export const tools: Tool[] = [
       validatePlan(readJson(p(a.plan)), scope);
       return 'Scope, plan and time window are valid; owner permission was not verified and no request was sent.';
     } },
-  { name: 'import_surface', network: false, description: 'Project an endpoint inventory from a HAR 1.2, Swagger 2.0/OpenAPI 3.x JSON or REA capture Evidence file. Offline.',
+  { name: 'import_surface', network: false, description: 'Project an endpoint inventory from a HAR 1.2, Swagger 2.0/OpenAPI 3.x JSON, REA capture Evidence, GraphQL introspection/SDL or JS bundle/SourceMap file. Offline.',
     args: {
-      format: enm(['har', 'openapi', 'rea'], { description: 'har, openapi or rea' }),
-      input: 'Path to the source JSON',
+      format: enm(['har', 'openapi', 'rea', 'graphql', 'js-bundle'], { description: 'har, openapi, rea, graphql or js-bundle' }),
+      input: 'Path to the source file',
       out: 'New output file',
     },
     run: async (a, p) => surfaceSummary(importSurfaceFile(p(a.input), a.format as Surface['format'], p(a.out))) },
@@ -275,4 +285,79 @@ export const tools: Tool[] = [
   { name: 'page_view', network: false, description: 'Verify and read bounded DOM route/form/script facts from a saved browser capture. Offline; never returns field values or query strings.',
     args: { capture: 'Capture folder containing pages.json' },
     run: async (a, p) => readPageSurface(p(a.capture)) },
+  { name: 'graphql_check', network: true, description: 'SENDS FIVE BOUNDED REQUESTS. Test operation-level GraphQL query authorization across two controlled identities, anonymous denial and /data JSON pointer projection.',
+    args: { scope: 'Canonical scope.json path', config: 'GraphQL check config JSON', out: 'New output directory' },
+    run: async (a, p, signal) => {
+      const scope = readJson(p(a.scope)); validateScope(scope);
+      const config = readJson(p(a.config)); validateGraphqlCheck(config, scope);
+      return usingScopeBudget(scope, p(a.scope), budget => graphqlCheck(p(a.out), scope, config, { budget, signal }), p);
+    } },
+  { name: 'resume_graphql_check', network: true, description: 'MAY SEND REMAINING REQUESTS. Resume a GraphQL authorization check with the same scope, config and shared budget.',
+    args: { check: 'Existing GraphQL check directory', scope: 'Original canonical scope.json path', config: 'Original GraphQL config JSON' },
+    run: async (a, p, signal) => {
+      const scope = readJson(p(a.scope)); validateScope(scope);
+      const config = readJson(p(a.config)); validateGraphqlCheck(config, scope);
+      return usingScopeBudget(scope, p(a.scope), budget => resumeGraphqlCheck(p(a.check), scope, config, { budget, signal }), p);
+    } },
+  { name: 'oauth_check', network: true, description: 'SENDS TWO BOUNDED GET REQUESTS. Compare registered redirect_uri 3xx baseline against unapproved external redirect_uri without following redirects.',
+    args: { scope: 'Canonical scope.json path', config: 'OAuth check config JSON', out: 'New output directory' },
+    run: async (a, p, signal) => {
+      const scope = readJson(p(a.scope)); validateScope(scope);
+      const config = readJson(p(a.config)); validateOauthCheck(config, scope);
+      return usingScopeBudget(scope, p(a.scope), budget => oauthCheck(p(a.out), scope, config, { budget, signal }), p);
+    } },
+  { name: 'resume_oauth_check', network: true, description: 'MAY SEND REMAINING REQUESTS. Resume an OAuth conformance check with the same scope, config and shared budget.',
+    args: { check: 'Existing OAuth check directory', scope: 'Original canonical scope.json path', config: 'Original OAuth config JSON' },
+    run: async (a, p, signal) => {
+      const scope = readJson(p(a.scope)); validateScope(scope);
+      const config = readJson(p(a.config)); validateOauthCheck(config, scope);
+      return usingScopeBudget(scope, p(a.scope), budget => resumeOauthCheck(p(a.check), scope, config, { budget, signal }), p);
+    } },
+  { name: 'redirect_check', network: true, description: 'SENDS TWO BOUNDED GET REQUESTS. Compare relative same-origin redirect baseline against external untrusted origin Location header without following redirects.',
+    args: { scope: 'Canonical scope.json path', config: 'Redirect check config JSON', out: 'New output directory' },
+    run: async (a, p, signal) => {
+      const scope = readJson(p(a.scope)); validateScope(scope);
+      const config = readJson(p(a.config)); validateRedirectCheck(config, scope);
+      return usingScopeBudget(scope, p(a.scope), budget => redirectCheck(p(a.out), scope, config, { budget, signal }), p);
+    } },
+  { name: 'resume_redirect_check', network: true, description: 'MAY SEND REMAINING REQUESTS. Resume an open-redirect check with the same scope, config and shared budget.',
+    args: { check: 'Existing redirect check directory', scope: 'Original canonical scope.json path', config: 'Original redirect config JSON' },
+    run: async (a, p, signal) => {
+      const scope = readJson(p(a.scope)); validateScope(scope);
+      const config = readJson(p(a.config)); validateRedirectCheck(config, scope);
+      return usingScopeBudget(scope, p(a.scope), budget => resumeRedirectCheck(p(a.check), scope, config, { budget, signal }), p);
+    } },
+  { name: 'import_policy', network: false, description: 'Parse a HackerOne, Bugcrowd, Intigriti or security.txt file offline into a conservative draft scope while quarantining wildcard hosts.',
+    args: {
+      format: enm(['hackerone', 'bugcrowd', 'intigriti', 'security-txt'], { description: 'hackerone, bugcrowd, intigriti or security-txt' }),
+      input: 'Path to policy JSON or security.txt',
+      out: 'New output directory',
+    },
+    run: async (a, p) => importPolicyFile(p(a.input), a.format as PolicyFormat, p(a.out)) },
+  { name: 'plan_candidates', network: false, description: 'Compile in-scope endpoint leads from candidates.json into a bounded three-step GET plan and checks.draft.json. Offline.',
+    args: {
+      scope: 'Path to scope.json',
+      candidates: 'Path to candidates.json',
+      out: 'New output directory',
+    },
+    run: async (a, p) => planCandidatesFile(p(a.scope), p(a.candidates), p(a.out)) },
+  { name: 'export_submission', network: false, description: 'Export a verified BBA artifact as a HackerOne, Bugcrowd or GHSA Markdown draft with conservative CVSS v3.1/v4.0 baseline and redacted curl commands. Offline.',
+    args: {
+      artifact: 'Verified BBA result directory or JSON file',
+      platform: enm(['hackerone', 'bugcrowd', 'ghsa'], { description: 'hackerone, bugcrowd or ghsa' }),
+      out: 'New Markdown output file',
+    },
+    run: async (a, p) => exportSubmission(p(a.artifact), a.platform as SubmissionPlatform, p(a.out)) },
+  { name: 'keygen_signing', network: false, description: 'Generate an Ed25519 keypair inside a new directory for signing BBA evidence artifacts. Offline.',
+    args: { out: 'New keypair directory' },
+    run: async (a, p) => generateSigningKeypair(p(a.out)) },
+  { name: 'sign_evidence', network: false, description: 'Sign a BBA artifact file or directory with an Ed25519 private key. Offline.',
+    args: { target: 'Artifact file or directory to sign', key: 'Path to Ed25519 private key PEM', out: 'New detached signature JSON path' },
+    run: async (a, p) => signEvidence(p(a.target), p(a.key), p(a.out)) },
+  { name: 'verify_signature', network: false, description: 'Verify an Ed25519 detached signature against a BBA artifact file or directory. Offline.',
+    args: { target: 'Artifact file or directory', pub: 'Path to Ed25519 public key PEM', sig: 'Path to detached signature JSON' },
+    run: async (a, p) => verifyEvidenceSignature(p(a.target), p(a.pub), p(a.sig)) },
+  { name: 'export_ui', network: false, description: 'Render a CSP-locked, read-only static HTML dashboard for an investigation, campaign, run or sealed artifact directory. Offline.',
+    args: { directory: 'BBA artifact or run directory', out: 'New .html output file' },
+    run: async (a, p) => exportInspectorHtml(p(a.directory), p(a.out)) },
 ];

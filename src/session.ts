@@ -10,11 +10,19 @@ import type { Fact } from './observations.ts';
 import type { Lang } from './i18n.ts';
 import pkg from '../package.json' with { type: 'json' };
 
+export type RedirectClass = 'same-origin' | 'external' | 'invalid';
 export type Attempt = {
   stepId: string; startedAt: string; endedAt: string | null;
   outcome: 'reserved' | 'succeeded' | 'cancelled' | 'interrupted' | 'error';
   reason: string | null;
-  response: { status: number; bytes: number; sha256: string; facts?: Fact[] } | null;
+  response: {
+    status: number;
+    bytes: number;
+    sha256: string;
+    facts?: Fact[];
+    redirectClass?: RedirectClass;
+    redirectOrigin?: string | null;
+  } | null;
 };
 export type Session = {
   schemaVersion: 2; toolVersion: '0.2.0'; id: string; createdAt: string;
@@ -58,11 +66,20 @@ export function validateSession(value: unknown): asserts value is Session {
       if (attempt.outcome === 'succeeded' ? attempt.reason !== null : !reasons.includes(attempt.reason)) throw new Error('Invalid outcome reason');
     }
     if (attempt.response !== null) {
-      optionalFields(attempt.response, ['status', 'bytes', 'sha256'], ['facts']);
+      optionalFields(attempt.response, ['status', 'bytes', 'sha256'], ['facts', 'redirectClass', 'redirectOrigin']);
       const r = attempt.response;
       if (!Number.isInteger(r.status) || r.status < 100 || r.status > 599
         || !Number.isInteger(r.bytes) || r.bytes < 0 || r.bytes > value.scope.limits.maxResponseBytes
         || typeof r.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(r.sha256)) throw new Error('Invalid response evidence');
+      if (r.redirectClass !== undefined && !['same-origin', 'external', 'invalid'].includes(r.redirectClass)) {
+        throw new Error('Invalid redirect classification');
+      }
+      if (r.redirectOrigin !== undefined && r.redirectOrigin !== null) {
+        if (typeof r.redirectOrigin !== 'string' || r.redirectOrigin.length > 256) throw new Error('Invalid redirect origin');
+        let parsedOrigin: URL;
+        try { parsedOrigin = new URL(r.redirectOrigin + '/'); } catch { throw new Error('Invalid redirect origin'); }
+        if (parsedOrigin.origin !== r.redirectOrigin) throw new Error('Invalid redirect origin');
+      }
       const projections = value.plan.steps[index].observe;
       if (projections) validateFacts(r.facts, projections);
       else if (r.facts !== undefined) throw new Error('Unrequested response facts');

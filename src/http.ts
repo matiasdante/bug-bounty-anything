@@ -1,7 +1,10 @@
 import { lookup } from 'node:dns/promises';
 import { request as httpRequest } from 'node:http';
+import { connect as http2Connect } from 'node:http2';
 import { request as httpsRequest } from 'node:https';
-import { isIP } from 'node:net';
+import { connect as netConnect, isIP } from 'node:net';
+import type { Socket } from 'node:net';
+import { connect as tlsConnect } from 'node:tls';
 import { assertAuthorized, validateScope } from './scope.ts';
 import type { Scope } from './scope.ts';
 import { identifyingHeaders } from './headers.ts';
@@ -165,6 +168,199 @@ export async function scopedRequest(scope: Scope, urlText: string, options: {
       });
       req.on('error', () => fail(signal.aborted ? aborted() : new RequestFailure('network-error')));
       req.end(resolved.body);
+    });
+  } catch (error) {
+    if (error instanceof RequestFailure) throw error;
+    throw new RequestFailure('network-error');
+  } finally {
+    clearTimeout(timer);
+    if (rejectAbort) signal.removeEventListener('abort', rejectAbort);
+  }
+}
+
+export type Http2PairItem = HttpResult & { startedAt: number; endedAt: number };
+
+export async function scopedHttp2Pair(
+  scope: Scope,
+  urlText: string,
+  specs: [RequestSpec, RequestSpec],
+  options: {
+    token?: string;
+    cookie?: string;
+    signal?: AbortSignal;
+    remainingMs?: number;
+    environment?: Record<string, string | undefined>;
+  } = {},
+): Promise<[Http2PairItem, Http2PairItem]> {
+  validateScope(scope);
+  const url = assertAuthorized(scope, urlText);
+  let resolvedA: ReturnType<typeof resolveRequest>;
+  let resolvedB: ReturnType<typeof resolveRequest>;
+  try {
+    resolvedA = resolveRequest(scope, urlText, specs[0], options.environment);
+    resolvedB = resolveRequest(scope, urlText, specs[1], options.environment);
+  } catch {
+    throw new RequestFailure('invalid-request-input');
+  }
+  let baseHeaders: Record<string, string>;
+  try { baseHeaders = identifyingHeaders(scope, url.origin, options.environment); }
+  catch { throw new RequestFailure('invalid-identifying-header'); }
+  if (options.token !== undefined && options.cookie !== undefined) throw new RequestFailure('invalid-credential');
+  if (options.token !== undefined && !bearerTokenRegex.test(options.token)) throw new RequestFailure('invalid-credential');
+  if (options.cookie !== undefined) {
+    try { credentialFor('BBA_COOKIE_X', options.cookie); } catch { throw new RequestFailure('invalid-credential'); }
+  }
+  const timeout = Math.min(scope.limits.timeoutMs, options.remainingMs ?? Infinity, Date.parse(scope.authorization.validUntil) - Date.now());
+  if (timeout <= 0) throw new RequestFailure('deadline');
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
+  const aborted = () => new RequestFailure(options.signal?.aborted ? 'cancelled' : 'deadline');
+  let rejectAbort: (() => void) | undefined;
+  try {
+    if (signal.aborted) throw aborted();
+    const targets = await Promise.race([
+      destinationAddresses(url, scope),
+      new Promise<never>((_, reject) => {
+        rejectAbort = () => reject(aborted());
+        signal.addEventListener('abort', rejectAbort, { once: true });
+      }),
+    ]);
+    if (rejectAbort) signal.removeEventListener('abort', rejectAbort);
+    if (signal.aborted) throw aborted();
+    assertAuthorized(scope, urlText);
+
+    return await new Promise<[Http2PairItem, Http2PairItem]>((resolve, reject) => {
+      let settled = false;
+      let rawSocket: Socket | undefined;
+      const port = Number(url.port || (url.protocol === 'https:' ? 443 : 80));
+      const client = http2Connect(url.origin, {
+        createConnection: () => {
+          rawSocket = url.protocol === 'https:'
+            ? tlsConnect({
+                host: targets[0].address,
+                port,
+                servername: isIP(url.hostname.replace(/^\[|\]$/g, '')) ? undefined : url.hostname,
+                ALPNProtocols: ['h2'],
+              })
+            : netConnect({ host: targets[0].address, port });
+          return rawSocket;
+        },
+      });
+      const cleanup = () => {
+        try { client.close(); } catch {}
+        try { client.destroy(); } catch {}
+      };
+      const fail = (err: Error) => {
+        if (!settled) {
+          settled = true;
+          cleanup();
+          reject(err);
+        }
+      };
+      const onAbort = () => fail(aborted());
+      signal.addEventListener('abort', onAbort, { once: true });
+      client.on('error', () => fail(signal.aborted ? aborted() : new RequestFailure('network-error')));
+
+      client.once('connect', () => {
+        if (signal.aborted) { fail(aborted()); return; }
+        const makeHeaders = (r: ReturnType<typeof resolveRequest>): Record<string, string> => {
+          const h: Record<string, string> = {
+            ':method': r.method,
+            ':path': r.url.pathname + r.url.search,
+            ':scheme': r.url.protocol.slice(0, -1),
+            ':authority': r.url.host,
+          };
+          for (const [k, v] of Object.entries(baseHeaders)) h[k.toLowerCase()] = v;
+          if (r.body) {
+            h['content-type'] = r.contentType!;
+            h['content-length'] = String(r.body.length);
+          }
+          if (options.cookie) h.cookie = options.cookie;
+          if (options.token) h.authorization = `Bearer ${options.token}`;
+          return h;
+        };
+
+        const streamA = client.request(makeHeaders(resolvedA), { endStream: false });
+        const streamB = client.request(makeHeaders(resolvedB), { endStream: false });
+
+        const collect = (stream: ReturnType<typeof client.request>, getStarted: () => number): Promise<Http2PairItem> =>
+          new Promise((resStream, rejStream) => {
+            let status = 0;
+            let contentType = '';
+            let location: string | undefined;
+            let setCookies: string[] | undefined;
+            let size = 0;
+            const chunks: Buffer[] = [];
+            let streamDone = false;
+            stream.on('response', hdrs => {
+              status = Number(hdrs[':status'] ?? 0);
+              contentType = typeof hdrs['content-type'] === 'string' ? hdrs['content-type'] : '';
+              location = typeof hdrs.location === 'string' ? hdrs.location : undefined;
+              const rawSc = hdrs['set-cookie'];
+              setCookies = Array.isArray(rawSc) ? rawSc : typeof rawSc === 'string' ? [rawSc] : undefined;
+            });
+            stream.on('data', (chunk: Buffer) => {
+              size += chunk.length;
+              if (size > scope.limits.maxResponseBytes) {
+                stream.close();
+                rejStream(new RequestFailure('response-too-large'));
+                return;
+              }
+              chunks.push(Buffer.from(chunk));
+            });
+            stream.on('end', () => {
+              streamDone = true;
+              resStream({
+                status,
+                body: Buffer.concat(chunks),
+                contentType,
+                location,
+                setCookies,
+                startedAt: getStarted(),
+                endedAt: performance.timeOrigin + performance.now(),
+              });
+            });
+            stream.on('error', () => rejStream(signal.aborted ? aborted() : new RequestFailure('network-error')));
+            stream.on('close', () => {
+              if (!streamDone) rejStream(signal.aborted ? aborted() : new RequestFailure('incomplete-response'));
+            });
+          });
+
+        let startedAt = performance.timeOrigin + performance.now();
+        const pA = collect(streamA, () => startedAt);
+        const pB = collect(streamB, () => startedAt);
+
+        const bodyA = resolvedA.body ?? Buffer.alloc(0);
+        const bodyB = resolvedB.body ?? Buffer.alloc(0);
+        if (bodyA.length > 1) streamA.write(bodyA.subarray(0, bodyA.length - 1));
+        if (bodyB.length > 1) streamB.write(bodyB.subarray(0, bodyB.length - 1));
+
+        // Sincroniza el envío del último byte de ambos streams en la misma escritura del socket.
+        startedAt = performance.timeOrigin + performance.now();
+        rawSocket?.cork();
+        try {
+          streamA.end(bodyA.length > 0 ? bodyA.subarray(bodyA.length - 1) : undefined);
+          streamB.end(bodyB.length > 0 ? bodyB.subarray(bodyB.length - 1) : undefined);
+        } finally {
+          rawSocket?.uncork();
+        }
+
+        Promise.all([pA, pB]).then(
+          pairResult => {
+            signal.removeEventListener('abort', onAbort);
+            if (!settled) {
+              settled = true;
+              cleanup();
+              resolve(pairResult);
+            }
+          },
+          err => {
+            signal.removeEventListener('abort', onAbort);
+            fail(err instanceof Error ? err : new RequestFailure('network-error'));
+          },
+        );
+      });
     });
   } catch (error) {
     if (error instanceof RequestFailure) throw error;

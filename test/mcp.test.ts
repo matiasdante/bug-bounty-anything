@@ -42,13 +42,13 @@ test('MCP initializes, lists only offline tools by default and rejects network t
     assert.deepEqual(Object.keys(init.result.capabilities), ['tools']);
     assert.equal((await s.request('initialize', { protocolVersion: '1999-01-01' })).result.protocolVersion, '2025-06-18', 'unknown versions fall back to the newest supported');
     const names = (await s.request('tools/list')).result.tools.map((t: { name: string }) => t.name);
-    assert.deepEqual(names.sort(), ['artifact_view', 'campaign_link', 'campaign_open', 'campaign_policy_review', 'campaign_status', 'capabilities', 'compare_runs', 'evaluate_jwt', 'evaluate_run', 'evaluate_semantic', 'evidence_view', 'export_run', 'import_candidates', 'import_surface', 'inspect_budget', 'inspect_run', 'page_view', 'plan_investigation', 'prepare', 'report_run', 'scope_check', 'start_case', 'study_bundle', 'study_plan']);
-    for (const network of ['run', 'resume', 'capture', 'hunt', 'investigate', 'resume_investigation', 'browser_check', 'browser_scenario', 'jwt_check', 'resume_jwt', 'template_check', 'resume_template_check', 'ssrf_callback_check', 'resume_ssrf_callback', 'cache_check', 'resume_cache_check', 'race_check', 'csrf_check', 'study_run', 'resume_study', 'inspect_web_page', 'campaign_capture', 'campaign_execute', 'campaign_resume']) {
+    assert.deepEqual(names.sort(), ['artifact_view', 'campaign_link', 'campaign_open', 'campaign_policy_review', 'campaign_status', 'capabilities', 'compare_runs', 'evaluate_jwt', 'evaluate_run', 'evaluate_semantic', 'evidence_view', 'export_run', 'export_submission', 'export_ui', 'import_candidates', 'import_policy', 'import_surface', 'inspect_budget', 'inspect_run', 'keygen_signing', 'page_view', 'plan_candidates', 'plan_investigation', 'prepare', 'report_run', 'scope_check', 'sign_evidence', 'start_case', 'study_bundle', 'study_plan', 'verify_signature']);
+    for (const network of ['run', 'resume', 'capture', 'hunt', 'investigate', 'resume_investigation', 'browser_check', 'browser_scenario', 'jwt_check', 'resume_jwt', 'graphql_check', 'resume_graphql_check', 'oauth_check', 'resume_oauth_check', 'redirect_check', 'resume_redirect_check', 'template_check', 'resume_template_check', 'ssrf_callback_check', 'resume_ssrf_callback', 'cache_check', 'resume_cache_check', 'race_check', 'csrf_check', 'study_run', 'resume_study', 'inspect_web_page', 'campaign_capture', 'campaign_execute', 'campaign_resume']) {
       const answer = await s.call(network, { scope: 'a', plan: 'b', out: 'c', run: 'd' });
       assert.equal(answer.error.code, -32602, network);
     }
     assert.deepEqual((await s.request('ping')).result, {});
-    assert.equal(JSON.parse((await s.call('capabilities', {})).result.content[0].text).confirmation.length, 7);
+    assert.equal(JSON.parse((await s.call('capabilities', {})).result.content[0].text).confirmation.length, 11);
     assert.equal((await s.request('resources/list')).error.code, -32601);
   } finally { assert.equal(await s.close(), 0); await rm(root, { recursive: true, force: true }); }
 });
