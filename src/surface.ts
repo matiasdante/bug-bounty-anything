@@ -30,15 +30,21 @@ function name(value: any): string {
   if (typeof value !== 'string' || !/^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/.test(value)) throw new Error('Unsupported parameter name');
   return value;
 }
+const surfaceSegmentRegex = /^(?:[A-Za-z0-9._~!$&'()*+,;=:@-]|%[0-9A-F]{2})*$/;
+const forbiddenSurfaceEscapeRegex = /%(?:0[0-9A-F]|1[0-9A-F]|2E|2F|5C|7F)/i;
+
 function safePath(path: string, declared = false): { path: string; pathKind: Endpoint['pathKind'] } {
-  if (path.length > 2048 || !path.startsWith('/') || path.startsWith('//') || /[^A-Za-z0-9/._~{}-]/.test(path)
+  if (path.length > 2048 || !path.startsWith('/') || path.includes('//') || forbiddenSurfaceEscapeRegex.test(path)
     || path.split('/').some(s => s === '.' || s === '..')) throw new Error('Unsupported path representation');
   let inferred = false;
-  const result = path.split('/').map(segment => {
+  const result = path.split('/').map((segment, index) => {
+    if (index === 0) return '';
     if (declared && /^\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(segment)) return segment;
     if (/[{}]/.test(segment)) throw new Error('Invalid path template');
+    if (!surfaceSegmentRegex.test(segment)) throw new Error('Unsupported path representation');
     if (/^\d+$/.test(segment) || /^[a-f0-9-]{32,}$/i.test(segment) || segment.length > 40) {
-      inferred = true; return '{opaque}';
+      inferred = true;
+      return '{opaque}';
     }
     return segment;
   }).join('/');

@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { canonical, digest } from './contracts.ts';
 import { jwtIntegrityCheck, validateJwtIntegrity } from './jwt-integrity.ts';
 import type { JwtIntegrityConfig, JwtIntegrityResult } from './jwt-integrity.ts';
-import { fields, integer, isoDate, methods, strictUrl, validateScope } from './scope.ts';
+import { fields, optionalFields, integer, isoDate, methods, strictUrl, validateScope } from './scope.ts';
 import type { RequestSpec, Scope } from './scope.ts';
 import { validateSurfaceBundle } from './surface.ts';
 import type { ProgramBudget } from './budget.ts';
@@ -13,6 +13,7 @@ import { inspectSession, readJson } from './session.ts';
 type Asset = { origin: string; pathPrefixes: string[] };
 export type StudyPolicy = { schemaVersion: 1; mode: Scope['mode']; sourceUrl: string; reviewedAt: string;
   authorization: Scope['authorization']; assets: Asset[]; excluded: Asset[];
+  requestHeaders?: Scope['requestHeaders'];
   techniques: ['jwt-signature-integrity']; budgetId: string; limits: Scope['limits'] };
 type StudyCase = { schemaVersion: 1; id: string; title: string; author: string; published: string; sourceUrl: string;
   class: 'jwt-signature-integrity'; referenceOnly: true };
@@ -46,7 +47,7 @@ function asset(value: unknown, mode: Scope['mode']): asserts value is Asset {
   value.pathPrefixes.forEach(prefix);
 }
 export function validateStudyPolicy(value: unknown): asserts value is StudyPolicy {
-  fields(value, ['schemaVersion', 'mode', 'sourceUrl', 'reviewedAt', 'authorization', 'assets', 'excluded', 'techniques', 'budgetId', 'limits']);
+  optionalFields(value, ['schemaVersion', 'mode', 'sourceUrl', 'reviewedAt', 'authorization', 'assets', 'excluded', 'techniques', 'budgetId', 'limits'], ['requestHeaders']);
   if (value.schemaVersion !== 1 || !['loopback-lab', 'public-https'].includes(value.mode)) throw new Error('Invalid study policy');
   sourceUrl(value.sourceUrl); isoDate(value.reviewedAt);
   fields(value.authorization, ['reference', 'validFrom', 'validUntil']);
@@ -58,6 +59,19 @@ export function validateStudyPolicy(value: unknown): asserts value is StudyPolic
     || !Array.isArray(value.excluded) || value.excluded.length > 20) throw new Error('Invalid policy assets');
   value.assets.forEach((a: unknown) => asset(a, value.mode));
   value.excluded.forEach((a: unknown) => asset(a, value.mode));
+  if (value.requestHeaders !== undefined) {
+    if (!Array.isArray(value.requestHeaders) || value.requestHeaders.length > 20) throw new Error('Invalid request headers');
+    const seen = new Set<string>();
+    for (const header of value.requestHeaders) {
+      fields(header, ['origin', 'name', 'valueEnv']);
+      if (!value.assets.some((a: Asset) => a.origin === header.origin)
+        || typeof header.name !== 'string' || !/^(user-agent|x-[a-z0-9-]{1,60})$/.test(header.name)
+        || typeof header.valueEnv !== 'string' || !/^BBA_HEADER_[A-Z0-9_]{1,50}$/.test(header.valueEnv)) throw new Error('Invalid identifying header');
+      const key = header.origin + ':' + header.name;
+      if (seen.has(key)) throw new Error('Duplicate identifying header');
+      seen.add(key);
+    }
+  }
   if (!Array.isArray(value.techniques) || value.techniques.length !== 1 || value.techniques[0] !== 'jwt-signature-integrity'
     || typeof value.budgetId !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(value.budgetId)) throw new Error('Invalid study technique or budget');
   fields(value.limits, ['maxRequests', 'minIntervalMs', 'timeoutMs', 'maxResponseBytes', 'maxDurationMs']);
@@ -127,8 +141,10 @@ export function compileStudy(value: unknown): StudyCompilation {
   let scope: Scope | null = null, config: JwtIntegrityConfig | null = null;
   if (selected) {
     const u = strictUrl(selected.url);
+    const matchingHeaders = policy.requestHeaders?.filter(h => h.origin === u.origin);
     scope = { schemaVersion: 1, mode: policy.mode, authorization: policy.authorization,
       allowed: [{ origin: u.origin, paths: [u.pathname] }], excluded: [], budgetId: policy.budgetId,
+      ...(matchingHeaders?.length ? { requestHeaders: matchingHeaders } : {}),
       requestRules: [{ origin: u.origin, path: u.pathname, method: bundle.profile.request.method,
         queryNames: (bundle.profile.request.query ?? []).map(q => q.name),
         bodyFormats: bundle.profile.request.body ? [bundle.profile.request.body.format] : [] }], limits: policy.limits };

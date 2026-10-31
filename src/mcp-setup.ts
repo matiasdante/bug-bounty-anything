@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { includesPlatformPath } from './paths.ts';
 
 export type McpSetup = { status: 'ready' | 'replace-ready' | 'installed' | 'updated' | 'already-present'; command: string; args: string[];
   root: string; backup: string | null; restartRequired: true; networkTools: boolean };
@@ -26,8 +27,9 @@ export function setupCodexMcp(root: string, apply = false, allowNetwork = false,
   const existing = runCodex(['mcp', 'get', 'bba']);
   let replaceExisting = false;
   if (existing.status === 0) {
-    if (existing.stdout?.includes(command) && existing.stdout.includes(cli) && existing.stdout.includes(workspace)
-      && existing.stdout.includes('--allow-network') === allowNetwork)
+    const out = existing.stdout ?? '';
+    if (includesPlatformPath(out, command) && includesPlatformPath(out, cli) && includesPlatformPath(out, workspace)
+      && out.includes('--allow-network') === allowNetwork)
       return { status: 'already-present', command, args, root: workspace,
         backup: null, restartRequired: true, networkTools: allowNetwork };
     if (!replace) throw new Error('An existing bba MCP registration differs; use --replace after review');
@@ -57,8 +59,9 @@ export function setupCodexMcp(root: string, apply = false, allowNetwork = false,
   const added = runCodex(['mcp', 'add', 'bba', '--', command, ...args]);
   if (added.status !== 0) { restore(); throw new Error('Codex MCP registration failed; original config restored from backup'); }
   const verified = runCodex(['mcp', 'get', 'bba']);
-  if (verified.status !== 0 || !verified.stdout?.includes(cli) || !verified.stdout?.includes(workspace)
-    || verified.stdout.includes('--allow-network') !== allowNetwork) {
+  const verifiedOut = verified.stdout ?? '';
+  if (verified.status !== 0 || !includesPlatformPath(verifiedOut, cli) || !includesPlatformPath(verifiedOut, workspace)
+    || verifiedOut.includes('--allow-network') !== allowNetwork) {
     restore(); throw new Error('Codex MCP registration could not be verified; original config restored from backup');
   }
   return { status: replaceExisting ? 'updated' : 'installed', command, args, root: workspace,

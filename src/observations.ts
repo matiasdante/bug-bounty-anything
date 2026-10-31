@@ -26,8 +26,16 @@ export function projectJson(body: Buffer, contentType: string, projections: Proj
   return projections.map(p => {
     let current: any = parsed;
     for (const segment of p.pointer === '' ? [] : p.pointer.slice(1).split('/').map(s => s.replaceAll('~1', '/').replaceAll('~0', '~'))) {
-      if (!current || typeof current !== 'object' || !Object.hasOwn(current, segment)) return absent(p.name, 'missing');
-      current = current[segment];
+      if (!current || typeof current !== 'object') return absent(p.name, 'missing');
+      if (Array.isArray(current)) {
+        if (!/^(?:0|[1-9]\d*)$/.test(segment)) return absent(p.name, 'missing');
+        const index = Number(segment);
+        if (!Number.isSafeInteger(index) || index >= current.length) return absent(p.name, 'missing');
+        current = current[index];
+      } else {
+        if (!Object.hasOwn(current, segment)) return absent(p.name, 'missing');
+        current = current[segment];
+      }
     }
     const kind = current === null ? 'null' : Array.isArray(current) ? 'array' : typeof current;
     const meaningful = kind === 'string' ? current.length > 0 : kind === 'object' || kind === 'array' ? Object.keys(current).length > 0 : kind === 'number' || kind === 'boolean';

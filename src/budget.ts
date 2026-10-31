@@ -7,9 +7,21 @@ import { validateScope } from './scope.ts';
 import type { Scope } from './scope.ts';
 import { RequestFailure } from './http.ts';
 
-type Reservation = { reference: string; reservedAt: number; endedAt: number | null };
+type Reservation = { reference: string; reservedAt: number; endedAt: number | null; pair?: boolean };
 type Event = { type: 'start'; authorizationDigest: string; limitsDigest: string; at: number }
-  | { type: 'reserve' | 'finish'; reference: string; at: number };
+  | { type: 'reserve'; reference: string; at: number; pair?: true }
+  | { type: 'finish'; reference: string; at: number };
+
+function canFinishReservation(reservations: Reservation[], index: number): boolean {
+  const selected = reservations[index];
+  if (!selected || selected.endedAt !== null) return false;
+  const openAfter = reservations.slice(index + 1).filter(r => r.endedAt === null);
+  if (openAfter.length === 0) return true;
+  return selected.pair === true
+    && openAfter.length === 1
+    && reservations[index + 1] === openAfter[0]
+    && openAfter[0].pair === true;
+}
 
 function read(db: DatabaseSync) {
   const size = db.prepare('SELECT count(*) AS n, max(length(body)) AS size FROM events').get()!;
@@ -27,17 +39,18 @@ function read(db: DatabaseSync) {
         || !/^[a-f0-9]{64}$/.test(event.authorizationDigest) || !/^[a-f0-9]{64}$/.test(event.limitsDigest)) throw new Error('Invalid shared budget start');
       start = event;
     } else {
-      if (!start || Object.keys(event).sort().join() !== 'at,reference,type' || typeof event.reference !== 'string'
+      const keys = Object.keys(event).sort().join();
+      const validKeys = keys === 'at,reference,type' || (event.type === 'reserve' && keys === 'at,pair,reference,type' && event.pair === true);
+      if (!start || !validKeys || typeof event.reference !== 'string'
         || !/^[A-Za-z0-9:._-]{1,200}$/.test(event.reference) || event.at < start.at) throw new Error('Invalid shared budget event');
       const last = reservations.at(-1);
       if (event.type === 'reserve') {
         if (reservations.some(r => r.reference === event.reference) || last && event.at < (last.endedAt ?? last.reservedAt)) throw new Error('Invalid shared budget reservation');
-        reservations.push({ reference: event.reference, reservedAt: event.at, endedAt: null });
+        reservations.push({ reference: event.reference, reservedAt: event.at, endedAt: null, ...(event.pair ? { pair: true } : {}) });
       } else if (event.type === 'finish') {
         const index = reservations.findIndex(r => r.reference === event.reference);
         const selected = reservations[index];
-        if (!selected || selected.endedAt !== null || event.at < selected.reservedAt
-          || reservations.slice(index + 1).some(r => r.endedAt === null)) throw new Error('Invalid shared budget completion');
+        if (!selected || event.at < selected.reservedAt || !canFinishReservation(reservations, index)) throw new Error('Invalid shared budget completion');
         selected.endedAt = event.at;
       }
       else throw new Error('Invalid shared budget completion');
@@ -90,9 +103,8 @@ export async function withProgramBudget<T>(folder: string, scope: Scope, action:
       beforeRequest: async (reference, signal) => {
         if (!/^[A-Za-z0-9:._-]{1,200}$/.test(reference) || state.reservations.some(r => r.reference === reference)) throw new Error('Shared budget reservation cannot be replayed');
         check(signal);
-        const last = state.reservations.at(-1);
-        // After process loss, conservatively wait through the previous timeout.
-        const lastEnd = last ? last.endedAt ?? last.reservedAt + scope.limits.timeoutMs : 0;
+        // After process loss, conservatively wait through any uncompleted reservation timeout.
+        const lastEnd = state.reservations.reduce((max, r) => Math.max(max, r.endedAt ?? r.reservedAt + scope.limits.timeoutMs), 0);
         const wait = Math.max(0, lastEnd + scope.limits.minIntervalMs - Date.now());
         if (Date.now() + wait >= deadline) throw new RequestFailure('deadline');
         if (wait) try { await delay(wait, undefined, { signal }); } catch { throw new RequestFailure('cancelled'); }
@@ -104,18 +116,16 @@ export async function withProgramBudget<T>(folder: string, scope: Scope, action:
             || state.reservations.some(r => r.reference === reference))) throw new Error('Invalid concurrent pair');
         check(signal);
         if (state.reservations.length + 2 > scope.limits.maxRequests) throw new RequestFailure('budget-exhausted');
-        const last = state.reservations.at(-1);
-        const lastEnd = last ? last.endedAt ?? last.reservedAt + scope.limits.timeoutMs : 0;
+        const lastEnd = state.reservations.reduce((max, r) => Math.max(max, r.endedAt ?? r.reservedAt + scope.limits.timeoutMs), 0);
         const wait = Math.max(0, lastEnd - Date.now());
         if (Date.now() + wait >= deadline) throw new RequestFailure('deadline');
         if (wait) try { await delay(wait, undefined, { signal }); } catch { throw new RequestFailure('cancelled'); }
         check(signal);
-        for (const reference of references) append({ type: 'reserve', reference, at: Date.now() });
+        for (const reference of references) append({ type: 'reserve', reference, at: Date.now(), pair: true });
       },
       complete: reference => {
         const index = state.reservations.findIndex(r => r.reference === reference);
-        const selected = state.reservations[index];
-        if (!selected || selected.endedAt !== null || state.reservations.slice(index + 1).some(r => r.endedAt === null))
+        if (!canFinishReservation(state.reservations, index))
           throw new Error('Invalid shared budget completion');
         append({ type: 'finish', reference, at: Date.now() });
       },
@@ -139,6 +149,6 @@ export function inspectBudget(folder: string) {
     db.exec('PRAGMA trusted_schema=OFF;'); const state = read(db);
     return { schemaVersion: 1, startedAt: new Date(state.start.at).toISOString(), authorizationDigest: state.start.authorizationDigest,
       limitsDigest: state.start.limitsDigest, reservedRequests: state.reservations.length, uncertainRequests: state.reservations.filter(r => r.endedAt === null).length,
-      revisionDigest: state.hash, reservations: state.reservations };
+      revisionDigest: state.hash, reservations: state.reservations.map(({ reference, reservedAt, endedAt }) => ({ reference, reservedAt, endedAt })) };
   } finally { db.close(); }
 }

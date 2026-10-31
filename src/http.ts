@@ -34,25 +34,34 @@ export function isPublicAddress(address: string): boolean {
   return false;
 }
 
-export async function destination(url: URL, scope: Scope, resolver = lookup): Promise<{ address: string; family: number }> {
+export async function destinationAddresses(url: URL, scope: Scope, resolver = lookup): Promise<{ address: string; family: number }[]> {
   if (scope.mode === 'loopback-lab') {
     if (url.hostname !== '127.0.0.1') throw new RequestFailure('address-blocked');
-    return { address: '127.0.0.1', family: 4 };
+    return [{ address: '127.0.0.1', family: 4 }];
   }
   const host = url.hostname.replace(/^\[|\]$/g, '');
   const family = isIP(host);
   const addresses = family ? [{ address: host, family }] : await resolver(host, { all: true, verbatim: true });
   if (!addresses.length || addresses.some(item => !isPublicAddress(item.address))) throw new RequestFailure('address-blocked');
-  return addresses[0];
+  return addresses.map(({ address, family: addrFamily }) => ({ address, family: addrFamily }));
 }
+
+export async function destination(url: URL, scope: Scope, resolver = lookup): Promise<{ address: string; family: number }> {
+  return (await destinationAddresses(url, scope, resolver))[0];
+}
+
+const cookieNamePattern = "[A-Za-z0-9!#$%&'*+.^_`|~:-]{1,128}";
+const cookieValuePattern = '(?:[\\x21\\x23-\\x2B\\x2D-\\x3A\\x3C-\\x5B\\x5D-\\x7E]{0,2048}|"[\\x21\\x23-\\x2B\\x2D-\\x3A\\x3C-\\x5B\\x5D-\\x7E]{0,2046}")';
+const cookieHeaderRegex = new RegExp(`^${cookieNamePattern}=${cookieValuePattern}(; ${cookieNamePattern}=${cookieValuePattern}){0,29}$`);
+const bearerTokenRegex = /^[A-Za-z0-9._~+:|-]{1,4096}={0,2}$/;
 
 // Operator-supplied secrets enter only through BBA_TOKEN_* (Bearer) or BBA_COOKIE_* (Cookie header).
 export function credentialFor(envName: string, value: string): { token?: string; cookie?: string } {
   if (envName.startsWith('BBA_COOKIE_')) {
-    if (!/^[A-Za-z0-9_.-]{1,64}=[A-Za-z0-9._~+/%=-]{0,2048}(; [A-Za-z0-9_.-]{1,64}=[A-Za-z0-9._~+/%=-]{0,2048}){0,19}$/.test(value)) throw new Error('Invalid credential format');
+    if (!cookieHeaderRegex.test(value)) throw new Error('Invalid credential format');
     return { cookie: value };
   }
-  if (!/^[A-Za-z0-9._~+/-]{1,4096}={0,2}$/.test(value)) throw new Error('Invalid credential format');
+  if (!bearerTokenRegex.test(value)) throw new Error('Invalid credential format');
   return { token: value };
 }
 
@@ -81,7 +90,7 @@ export async function scopedRequest(scope: Scope, urlText: string, options: {
     headers.Origin = options.browserOrigin;
   }
   if (options.token !== undefined && options.cookie !== undefined && options.browserCredentials !== true) throw new RequestFailure('invalid-credential');
-  if (options.token !== undefined && !/^[A-Za-z0-9._~+/-]{1,4096}={0,2}$/.test(options.token)) throw new RequestFailure('invalid-credential');
+  if (options.token !== undefined && !bearerTokenRegex.test(options.token)) throw new RequestFailure('invalid-credential');
   if (options.cookie !== undefined) try { credentialFor('BBA_COOKIE_X', options.cookie); } catch { throw new RequestFailure('invalid-credential'); }
   const timeout = Math.min(scope.limits.timeoutMs, options.remainingMs ?? Infinity,
     Date.parse(scope.authorization.validUntil) - Date.now());
@@ -93,43 +102,68 @@ export async function scopedRequest(scope: Scope, urlText: string, options: {
   let rejectAbort: (() => void) | undefined;
   try {
     if (signal.aborted) throw aborted();
-    const target = await Promise.race([
-      destination(url, scope),
+    const targets = await Promise.race([
+      destinationAddresses(url, scope),
       new Promise<never>((_, reject) => { rejectAbort = () => reject(aborted()); signal.addEventListener('abort', rejectAbort, { once: true }); }),
     ]);
     if (rejectAbort) signal.removeEventListener('abort', rejectAbort);
     if (signal.aborted) throw aborted();
     assertAuthorized(scope, urlText); // Revalidate after DNS resolution.
     return await new Promise<HttpResult>((resolve, reject) => {
+      let settled = false;
+      const done = (result: HttpResult) => { if (!settled) { settled = true; resolve(result); } };
+      const fail = (error: Error) => { if (!settled) { settled = true; reject(error); } };
       const send = url.protocol === 'https:' ? httpsRequest : httpRequest;
-      const req = send(resolved.url, {
-        method: resolved.method, agent: false, signal,
-        // Pin the validated resolution; the original hostname still controls
+      const requestOptions: import('node:https').RequestOptions & { autoSelectFamily?: boolean } = {
+        method: resolved.method,
+        agent: false,
+        signal,
+        autoSelectFamily: targets.length > 1,
+        // Pin all validated public resolutions; the original hostname still controls
         // TLS certificate verification and SNI. Environment proxies are unused.
-        lookup: (_host, _options, callback) => {
-          if (_options.all) callback(null, [target]);
-          else callback(null, target.address, target.family);
+        lookup: (_host, lookupOptions, callback) => {
+          if (lookupOptions.all) callback(null, targets);
+          else callback(null, targets[0].address, targets[0].family);
         },
         headers: { ...headers, ...(resolved.body ? { 'Content-Type': resolved.contentType!, 'Content-Length': String(resolved.body.length) } : {}), ...(options.cookie ? { Cookie: options.cookie } : {}), ...(options.token ? { Authorization: `Bearer ${options.token}` } : {}) },
-      }, res => {
+      };
+      const req = send(resolved.url, requestOptions, res => {
         const status = res.statusCode ?? 0;
         if ((status >= 300 && status < 400) || status === 429 || status >= 500) {
-          resolve({ status, body: Buffer.alloc(0), contentType: '', location: res.headers.location, setCookies: res.headers['set-cookie'] }); res.destroy(); return;
+          done({ status, body: Buffer.alloc(0), contentType: '', location: res.headers.location, setCookies: res.headers['set-cookie'] });
+          res.destroy();
+          return;
         }
         let size = 0;
         const chunks: Buffer[] = [];
         res.on('data', (chunk: Buffer) => {
           size += chunk.length;
           if (size > scope.limits.maxResponseBytes) {
-            reject(new RequestFailure('response-too-large')); res.destroy(); return;
+            fail(new RequestFailure('response-too-large'));
+            res.destroy();
+            return;
           }
           chunks.push(chunk);
         });
-        res.on('error', () => reject(signal.aborted ? aborted() : new RequestFailure('incomplete-response')));
-        res.on('end', () => resolve({ status, body: Buffer.concat(chunks), contentType: res.headers['content-type'] ?? '', setCookies: res.headers['set-cookie'],
-          browserHeaders: Object.fromEntries(browserResponseHeaders.flatMap(name => typeof res.headers[name] === 'string' ? [[name, res.headers[name] as string]] : [])) }));
+        res.on('error', () => fail(signal.aborted ? aborted() : new RequestFailure('incomplete-response')));
+        res.on('end', () => {
+          if (!res.complete) {
+            fail(signal.aborted ? aborted() : new RequestFailure('incomplete-response'));
+            return;
+          }
+          done({
+            status,
+            body: Buffer.concat(chunks),
+            contentType: res.headers['content-type'] ?? '',
+            setCookies: res.headers['set-cookie'],
+            browserHeaders: Object.fromEntries(browserResponseHeaders.flatMap(name => typeof res.headers[name] === 'string' ? [[name, res.headers[name] as string]] : [])),
+          });
+        });
+        res.on('close', () => {
+          if (!settled) fail(signal.aborted ? aborted() : new RequestFailure('incomplete-response'));
+        });
       });
-      req.on('error', () => reject(signal.aborted ? aborted() : new RequestFailure('network-error')));
+      req.on('error', () => fail(signal.aborted ? aborted() : new RequestFailure('network-error')));
       req.end(resolved.body);
     });
   } catch (error) {

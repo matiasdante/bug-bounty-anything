@@ -138,8 +138,16 @@ export async function browserCheck(folder: string, scope: Scope, config: Browser
               if (response.status !== 200) return { available: false };
               let current = await response.json();
               for (const segment of pointer === '' ? [] : pointer.slice(1).split('/').map(s => s.replaceAll('~1', '/').replaceAll('~0', '~'))) {
-                if (!current || typeof current !== 'object' || !Object.hasOwn(current, segment)) return { available: false };
-                current = current[segment];
+                if (!current || typeof current !== 'object') return { available: false };
+                if (Array.isArray(current)) {
+                  if (!/^(?:0|[1-9]\d*)$/.test(segment)) return { available: false };
+                  const idx = Number(segment);
+                  if (!Number.isSafeInteger(idx) || idx >= current.length) return { available: false };
+                  current = current[idx];
+                } else {
+                  if (!Object.hasOwn(current, segment)) return { available: false };
+                  current = current[segment];
+                }
               }
               return typeof current === 'string' && current.length || typeof current === 'number' && Number.isFinite(current) ? { available: true, value: current } : { available: false };
             } catch { return { available: false }; }

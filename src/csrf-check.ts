@@ -38,6 +38,16 @@ export function validateCsrfCheck(value: unknown, scope: Scope): asserts value i
   if (scope.limits.maxRequests < 5) throw new Error('CSRF proof needs five request reservations');
 }
 
+function parseCookies(cookieHeader: string | undefined): Map<string, string> {
+  const parsed = new Map<string, string>();
+  if (!cookieHeader) return parsed;
+  for (const rawPair of cookieHeader.split(/;\s*/)) {
+    const index = rawPair.indexOf('=');
+    if (index > 0) parsed.set(rawPair.slice(0, index), rawPair.slice(index + 1));
+  }
+  return parsed;
+}
+
 export async function csrfCheck(folder: string, scope: Scope, config: CsrfCheck,
   options: { signal?: AbortSignal; budget?: ProgramBudget; credentials?: Record<string, string | undefined> } = {}) {
   validateCsrfCheck(config, scope);
@@ -47,6 +57,7 @@ export async function csrfCheck(folder: string, scope: Scope, config: CsrfCheck,
   validateHeaderEnvironment(scope, env);
   if (!env[config.cookieEnv]) throw new Error('Missing controlled cookie');
   const cookie = credentialFor(config.cookieEnv, env[config.cookieEnv]!).cookie!;
+  const expectedCookies = parseCookies(cookie);
   const victimOrigin = new URL(config.actionUrl).origin, attackerOrigin = new URL(config.attackerPageUrl).origin;
   mkdirSync(dirname(folder), { recursive: true }); mkdirSync(folder);
   writeFileSync(join(folder, 'scope.json'), JSON.stringify(scope, null, 2), { flag: 'wx', mode: 0o600 });
@@ -58,14 +69,14 @@ export async function csrfCheck(folder: string, scope: Scope, config: CsrfCheck,
   let cookieDelivered = false, originMatched = false;
   const state = { before: null as string | null, after: null as string | null, anonymousStatus: null as number | null };
   append({ event: 'start', id, scopeDigest: digest(scope), configDigest: digest(config) });
-  const send = async (stepId: string, url: string, method: 'GET' | 'POST', withCookie: boolean, origin?: string) => {
+  const send = async (stepId: string, url: string, method: 'GET' | 'POST', cookieHeader?: string, origin?: string) => {
     if (options.signal?.aborted || Date.now() >= deadline || used >= 5) throw new Error('cancelled-or-budget');
     const ordinal = ++used, reference = id + ':' + stepId;
     append({ event: 'reserved', ordinal, stepId, at: new Date().toISOString() });
     let reserved = false;
     try {
       if (options.budget) { await options.budget.beforeRequest(reference, options.signal); reserved = true; }
-      const r = await scopedRequest(scope, url, { ...(withCookie ? { cookie } : {}),
+      const r = await scopedRequest(scope, url, { ...(cookieHeader ? { cookie: cookieHeader } : {}),
         request: method === 'GET' ? { method } : { method, body: { format: 'form', valueEnv: bodyRef } },
         environment: env, browserOrigin: origin, browserCredentials: true,
         signal: options.signal, remainingMs: Math.min(deadline - Date.now(), options.budget?.remainingMs() ?? Infinity) });
@@ -79,10 +90,10 @@ export async function csrfCheck(folder: string, scope: Scope, config: CsrfCheck,
   };
   let browser: Awaited<ReturnType<typeof launchIsolated>> | undefined;
   try {
-    const before = await send('state-before', config.stateUrl, 'GET', true);
+    const before = await send('state-before', config.stateUrl, 'GET', cookie);
     state.before = before.response.status === 200 && before.fact?.kind === 'string' ? before.fact.sha256 : null;
     if (state.before !== digest(config.beforeValue)) throw new Error('state-precondition');
-    state.anonymousStatus = (await send('anonymous-action', config.actionUrl, 'POST', false, attackerOrigin)).response.status;
+    state.anonymousStatus = (await send('anonymous-action', config.actionUrl, 'POST', undefined, attackerOrigin)).response.status;
     if (![401, 403, 404].includes(state.anonymousStatus)) throw new Error('anonymous-action-not-denied');
     browser = await launchIsolated();
     const context = await browser.browser.newContext({ serviceWorkers: 'block', acceptDownloads: false });
@@ -98,15 +109,17 @@ export async function csrfCheck(folder: string, scope: Scope, config: CsrfCheck,
         const request = route.request(), url = request.url();
         try {
           if (request.method() === 'GET' && url === config.attackerPageUrl) {
-            const r = (await send('attacker-page', url, 'GET', false)).response;
+            const r = (await send('attacker-page', url, 'GET', undefined)).response;
             await route.fulfill({ status: r.status, contentType: r.contentType || undefined, body: r.body }); return;
           }
           if (request.method() === 'POST' && url === config.actionUrl) {
             const headers = await request.allHeaders();
             originMatched = headers.origin === attackerOrigin;
-            cookieDelivered = !!headers.cookie && headers.cookie === cookie;
+            const deliveredMap = parseCookies(headers.cookie);
+            cookieDelivered = expectedCookies.size > 0
+              && [...expectedCookies.entries()].every(([name, val]) => deliveredMap.get(name) === val);
             if (!originMatched || request.postData() !== env[bodyRef]) { blocked++; await route.abort('blockedbyclient'); formDone(); return; }
-            const r = (await send('browser-action', url, 'POST', cookieDelivered, attackerOrigin)).response;
+            const r = (await send('browser-action', url, 'POST', headers.cookie, attackerOrigin)).response;
             browserStatus = r.status;
             await route.fulfill({ status: r.status, contentType: r.contentType || undefined, body: r.body });
             formDone(); return;
@@ -123,7 +136,7 @@ export async function csrfCheck(folder: string, scope: Scope, config: CsrfCheck,
       }, { action: config.actionUrl, field: config.formField, value: config.formValue });
       await Promise.race([formPromise, delay(Math.min(2000, Math.max(1, deadline - Date.now())))]);
     } finally { await context.close(); }
-    const after = await send('state-after', config.stateUrl, 'GET', true);
+    const after = await send('state-after', config.stateUrl, 'GET', cookie);
     state.after = after.response.status === 200 && after.fact?.kind === 'string' ? after.fact.sha256 : null;
   } catch (error) { stopped = options.signal?.aborted ? 'cancelled' : error instanceof Error ? error.message : 'execution-failed'; }
   finally { try { if (browser) await browser.close(); } finally { append({ event: 'finish', requests: used, blocked, stopped }); closeSync(fd); } }

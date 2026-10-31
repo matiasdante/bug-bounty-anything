@@ -34,6 +34,7 @@ import { ssrfCallbackCheck, resumeSsrfCallbackCheck, validateSsrfCallback } from
 import { cacheCheck, resumeCacheCheck, validateCacheCheck } from './cache-check.ts';
 import { raceCheck, validateRaceCheck } from './race-check.ts';
 import { csrfCheck, validateCsrfCheck } from './csrf-check.ts';
+import { safeErrorMessage } from './contracts.ts';
 
 import pkg from '../package.json' with { type: 'json' };
 
@@ -119,9 +120,24 @@ function options(args: string[], names: string[]): Map<string, string> {
   return parsed;
 }
 
+function commandHelp(command: string): string | null {
+  const prefix = `  npm run bba -- ${command}`;
+  const matches = help.split('\n').filter(line => line === prefix || line.startsWith(prefix + ' '));
+  if (!matches.length) return null;
+  return `BBA ${pkg.version} — ayuda de ${command}\n\n${matches.join('\n')}\n`;
+}
+
 async function main(args: string[]): Promise<void> {
   const [command, ...rest] = args;
-  if (!command || (command === '--help' && !rest.length)) { console.log(help); return; }
+  if (!command || ((command === '--help' || command === '-h') && !rest.length)) { console.log(help); return; }
+  if ((command === '--help' || command === '-h') && rest.length === 1) {
+    const specific = commandHelp(rest[0]);
+    if (specific) { console.log(specific); return; }
+  }
+  if (rest.length === 1 && (rest[0] === '--help' || rest[0] === '-h')) {
+    const specific = commandHelp(command);
+    if (specific) { console.log(specific); return; }
+  }
   let action: () => Promise<void>;
   try {
     if (command === 'study-bundle') {
@@ -315,13 +331,9 @@ async function main(args: string[]): Promise<void> {
       action = async () => {
         const scope = readJson(flags.get('--scope')!); validateScope(scope);
         const config = readJson(flags.get('--config')!); validateHunt(config, scope);
-        const controller = new AbortController(); const cancel = () => controller.abort();
-        process.on('SIGINT', cancel); process.on('SIGTERM', cancel);
-        try {
-          const result = await usingScopeBudget(scope, flags.get('--scope')!, budget => hunt(flags.get('--out')!, scope, config, { signal: controller.signal, budget }));
-          console.log(JSON.stringify({ requests: result.requests, stopped: result.stopped, findings: result.findings.map(f => ({ status: f.status, url: f.url })) }, null, 2));
-          process.exitCode = result.stopped === 'cancelled' ? 130 : result.stopped ? 1 : 0;
-        } finally { process.off('SIGINT', cancel); process.off('SIGTERM', cancel); }
+        const result = await usingScopeBudget(scope, flags.get('--scope')!, budget => withCancellation(signal => hunt(flags.get('--out')!, scope, config, { signal, budget })));
+        console.log(JSON.stringify({ requests: result.requests, stopped: result.stopped, findings: result.findings.map(f => ({ status: f.status, url: f.url })) }, null, 2));
+        process.exitCode = result.stopped === 'cancelled' ? 130 : result.stopped ? 1 : 0;
       };
     } else if (command === 'doctor' && !rest.length) {
       action = async () => { const result = await doctor(); console.log(JSON.stringify(result, null, 2)); process.exitCode = result.ok ? 0 : 1; };
@@ -349,23 +361,18 @@ async function main(args: string[]): Promise<void> {
         const scope = readJson(flags.get('--scope')!); validateScope(scope); assertAuthorized(scope, flags.get('--url')!);
         const plan = { schemaVersion: 1, steps: [{ id: 'seed', method: 'GET', url: flags.get('--url')!, credentialEnv: null }] };
         validatePlan(plan, scope);
-        const { capture, pages } = await usingScopeBudget(scope, flags.get('--scope')!, budget => captureSurface(flags.get('--out')!, scope, plan, { budget }));
+        const { capture, pages } = await usingScopeBudget(scope, flags.get('--scope')!, budget => withCancellation(signal => captureSurface(flags.get('--out')!, scope, plan, { signal, budget })));
         console.log(JSON.stringify({ stopReason: capture.stopReason, counts: capture.counts, page: pages.pages[0] ?? null, output: flags.get('--out') }, null, 2));
-        process.exitCode = capture.stopReason ? 1 : 0;
+        process.exitCode = capture.stopReason === 'cancelled' ? 130 : capture.stopReason ? 1 : 0;
       };
     } else if (command === 'capture') {
       const flags = options(rest, ['--scope', '--plan', '--out']);
       action = async () => {
         const scope = readJson(flags.get('--scope')!); validateScope(scope);
         const plan = readJson(flags.get('--plan')!); validatePlan(plan, scope);
-        const controller = new AbortController();
-        const cancel = () => controller.abort();
-        process.on('SIGINT', cancel); process.on('SIGTERM', cancel);
-        try {
-          const { capture, surface } = await usingScopeBudget(scope, flags.get('--scope')!, budget => captureSurface(flags.get('--out')!, scope, plan, { signal: controller.signal, budget }));
-          console.log(JSON.stringify({ ...surfaceSummary(surface), stopReason: capture.stopReason, counts: capture.counts }, null, 2));
-          process.exitCode = capture.stopReason === 'cancelled' ? 130 : capture.stopReason ? 1 : 0;
-        } finally { process.off('SIGINT', cancel); process.off('SIGTERM', cancel); }
+        const { capture, surface } = await usingScopeBudget(scope, flags.get('--scope')!, budget => withCancellation(signal => captureSurface(flags.get('--out')!, scope, plan, { signal, budget })));
+        console.log(JSON.stringify({ ...surfaceSummary(surface), stopReason: capture.stopReason, counts: capture.counts }, null, 2));
+        process.exitCode = capture.stopReason === 'cancelled' ? 130 : capture.stopReason ? 1 : 0;
       };
     } else if (command === 'import-candidates') {
       const flags = options(rest, ['--format', '--input', '--scope', '--out']);
@@ -427,9 +434,7 @@ async function main(args: string[]): Promise<void> {
   }
   try { await action(); } catch (error) {
     // Do not echo request bodies, credential values or hostile imported content.
-    const known = error instanceof Error ? error.message : 'Unknown error';
-    const safe = /^[A-Za-z0-9 .;:'()/-]{1,160}$/.test(known) ? known : 'Operation failed; check arguments and local artifact integrity';
-    console.error(`BBA: ${safe}`); process.exitCode = 1;
+    console.error(`BBA: ${safeErrorMessage(error)}`); process.exitCode = 1;
   }
 }
 

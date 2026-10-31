@@ -8,12 +8,11 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { chromium } from 'playwright-core';
 import { createSocket } from 'node:dgram';
 import { captureSurface, launchIsolated, readPageSurface } from '../src/capture.ts';
 import type { Plan, Scope } from '../src/scope.ts';
 
-const browser = await chromium.launch({ headless: true }).then(b => b.close().then(() => true), () => false);
+const browser = await launchIsolated().then(b => b.close().then(() => true), () => false);
 const skip = browser ? false : 'Chromium headless shell missing: npx playwright-core install --only-shell chromium';
 const token = 'capture-test-token-0123456789';
 

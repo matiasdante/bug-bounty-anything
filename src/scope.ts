@@ -35,14 +35,31 @@ export function isoDate(value: unknown): asserts value is string {
     || !Number.isFinite(Date.parse(value)) || new Date(value).toISOString() !== value) throw new Error('Invalid timestamp');
 }
 
-// Conservative URL subset: no queries, escapes, credentials, fragments or
-// normalization ambiguities. Paths are exact, case-sensitive matches.
+const pcharSegmentRegex = /^(?:[A-Za-z0-9._~!$&'()*+,;=:@-]|%[0-9A-F]{2})*$/;
+const forbiddenPercentEscapeRegex = /%(?:0[0-9A-F]|1[0-9A-F]|2E|2F|5C|7F)/i;
+
+export function isCanonicalUrlPath(pathname: string): boolean {
+  if (!pathname.startsWith('/') || pathname.length > 2048 || pathname.includes('//')) return false;
+  if (forbiddenPercentEscapeRegex.test(pathname)) return false;
+  const segments = pathname.slice(1).split('/');
+  for (const segment of segments) {
+    if (segment === '.' || segment === '..' || !pcharSegmentRegex.test(segment)) return false;
+  }
+  return true;
+}
+
+// Canonical RFC 3986 URL subset: no queries, userinfo, fragments, traversal or encoded separators.
 export function strictUrl(value: unknown): URL {
-  if (typeof value !== 'string' || value.length > 2048 || /[%\\\s?#@]/.test(value)) throw new Error('Invalid URL');
+  if (typeof value !== 'string' || value.length > 2048 || /[\\\s?#]/.test(value)) throw new Error('Invalid URL');
+  const schemeSep = value.indexOf('://');
+  if (schemeSep <= 0) throw new Error('Invalid URL');
+  const pathStart = value.indexOf('/', schemeSep + 3);
+  const authority = pathStart === -1 ? value.slice(schemeSep + 3) : value.slice(schemeSep + 3, pathStart);
+  if (authority.includes('@')) throw new Error('Invalid URL');
   let url: URL;
   try { url = new URL(value); } catch { throw new Error('Invalid URL'); }
-  if (!['http:', 'https:'].includes(url.protocol) || url.href !== value
-    || !/^\/[A-Za-z0-9._~/-]*$/.test(url.pathname)) throw new Error('Non-canonical URL');
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.href !== value
+    || !isCanonicalUrlPath(url.pathname)) throw new Error('Non-canonical URL');
   return url;
 }
 

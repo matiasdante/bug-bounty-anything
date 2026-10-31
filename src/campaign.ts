@@ -1,8 +1,9 @@
 import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync,
   renameSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
-import { canonical, digest } from './contracts.ts';
+import { dirname, join, resolve } from 'node:path';
+import { canonical, digest, SafeError } from './contracts.ts';
+import { isStrictSubpath, samePath, withSqliteLockSync } from './paths.ts';
 import { assertAuthorized, fields, isoDate, strictUrl, validateScope } from './scope.ts';
 import type { Scope } from './scope.ts';
 import { readJson, inspectSession } from './session.ts';
@@ -144,7 +145,7 @@ function artifact(path: string, kind: Kind, target: string, records: Event[]): {
   }
   const runEvent = latest(records, 'run');
   if (!runEvent || runEvent.sequence < (latest(records, 'profile')?.sequence ?? 0)
-    || dirname(runEvent.artifact) !== dirname(path)) throw new Error('Attach the current run before its report');
+    || !samePath(dirname(runEvent.artifact), dirname(path))) throw new Error('Attach the current run before its report');
   const stat = lstatSync(path);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) throw new Error('Invalid campaign report');
   const body = readFileSync(path);
@@ -179,15 +180,13 @@ export function preparePolicyReview(folder: string, sourceUrl: string, sourceKin
 }
 export function linkCampaign(folder: string, kind: string, input: string) {
   if (!kinds.includes(kind as Kind)) throw new Error('Unsupported campaign artifact kind');
-  const base = realpathSync(folder), path = realpathSync(input), lockPath = join(base, '.campaign.lock');
-  const rel = relative(base, path);
-  if (!rel || rel.startsWith('..') || isAbsolute(rel)) throw new Error('Campaign artifact must be inside its folder');
-  const fd = openSync(lockPath, 'wx', 0o600);
-  try {
+  const base = realpathSync(folder), path = realpathSync(input), lockPath = join(base, '.campaign.lock.sqlite');
+  if (!isStrictSubpath(base, path)) throw new Error('Campaign artifact must be inside its folder');
+  return withSqliteLockSync(lockPath, 'Campaign ledger is already locked by another process', () => {
     const state = manifest(base), records = events(base), selected = kind as Kind;
     if (['scope', 'policy'].includes(kind) && latest(records, selected)) throw new Error('Campaign artifact is immutable');
     const validated = artifact(path, selected, state.target, records);
-    if (records.some(e => e.kind === selected && e.artifact === path && e.artifactDigest === validated.artifactDigest))
+    if (records.some(e => e.kind === selected && samePath(e.artifact, path) && e.artifactDigest === validated.artifactDigest))
       throw new Error('Campaign artifact already linked');
     if (records.length >= 100) throw new Error('Campaign event limit reached');
     const previousHash = records.at(-1)?.hash ?? '', sequence = records.length + 1, at = new Date().toISOString();
@@ -195,14 +194,14 @@ export function linkCampaign(folder: string, kind: string, input: string) {
     const event: Event = { ...head, hash: digest(head) };
     writeEnvelope(join(base, 'events.json'), 'events', [...records, event], true);
     return { campaign: base, sequence, kind: selected, artifactDigest: validated.artifactDigest, revision: event.hash };
-  } finally { closeSync(fd); unlinkSync(lockPath); }
+  });
 }
 export function campaignStatus(folder: string) {
   const base = realpathSync(folder), state = manifest(base), records = events(base);
   // Validate every retained source on read; changed artifacts cannot silently keep their old conclusions.
   for (const record of records) {
-    const real = realpathSync(record.artifact), rel = relative(base, real);
-    if (!rel || rel.startsWith('..') || isAbsolute(rel)) throw new Error('Campaign artifact escaped its folder');
+    const real = realpathSync(record.artifact);
+    if (!isStrictSubpath(base, real)) throw new Error('Campaign artifact escaped its folder');
     const previous = records.slice(0, record.sequence - 1);
     if (scopeExpired(previous) && (record.kind === 'profile' || record.kind === 'run')) {
       const value = record.kind === 'profile' ? readJson(real) : inspectSession(real);
@@ -252,7 +251,7 @@ export function campaignStatus(folder: string) {
 function activeInputs(folder: string, allowInterrupted = false): { base: string; records: Event[]; scope: Scope; scopePath: string; target: string } {
   const status = campaignStatus(folder);
   const blockers = status.blockers.filter(item => item !== 'interrupted-action' || !allowInterrupted);
-  if (blockers.length) throw new Error('Campaign blocked: ' + blockers.join(', '));
+  if (blockers.length) throw new SafeError('Campaign blocked: ' + blockers.join(', '));
   const base = status.campaign, records = events(base), scopeEvent = latest(records, 'scope');
   const policyEvent = latest(records, 'policy');
   if (!scopeEvent || !policyEvent || policyEvent.summary.decision !== 'authorized')

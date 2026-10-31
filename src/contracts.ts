@@ -1,5 +1,28 @@
 import { createHash } from 'node:crypto';
 
+export class SafeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SafeError';
+  }
+}
+
+// Filtra mensajes de error para CLI y MCP sin filtrar cuerpos HTTP, secretos ni entradas hostiles.
+export function safeErrorMessage(error: unknown): string {
+  if (error instanceof SafeError) {
+    const cleaned = error.message.replace(/[\r\n\x00-\x1f\x7f]+/g, ' ').trim().slice(0, 240);
+    return cleaned || 'Operation failed';
+  }
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  if (code === 'ENOENT') return 'Required file or directory does not exist';
+  if (code === 'EEXIST') return 'Output path already exists; choose a new path';
+  if (code === 'EACCES' || code === 'EPERM') return 'Permission denied accessing local path';
+  const known = error instanceof Error ? error.message : 'Unknown error';
+  return /^[A-Za-z0-9 .,;_:'()[\]/-]{1,220}$/.test(known)
+    ? known
+    : 'Operation failed; check arguments and local artifact integrity';
+}
+
 export type Actor = 'anonymous' | 'account-a' | 'account-b';
 export type Variant = 'vulnerable' | 'fixed';
 export type Status = 'confirmed' | 'not-reproduced' | 'unresolved';

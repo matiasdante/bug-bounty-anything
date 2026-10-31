@@ -58,12 +58,13 @@ export async function raceCheck(folder: string, scope: Scope, config: RaceCheck,
   const replies = new Map<string, Reply>();
   append({ event: 'start', id, scopeDigest: digest(scope), configDigest: digest(config) });
   const send = async (stepId: string, url: string, method: 'GET' | 'POST', bodyEnv?: string, preReserved = false) => {
-    if (options.signal?.aborted || Date.now() >= deadline || used >= 7) throw new Error('cancelled-or-budget');
-    const spec = method === 'GET' ? { method } as const : { method, body: { format: 'json' as const, valueEnv: bodyEnv! } };
-    const reference = id + ':' + stepId, ordinal = ++used;
-    append({ event: 'reserved', ordinal, stepId, at: new Date().toISOString() });
-    let sharedReserved = false;
+    const reference = id + ':' + stepId;
+    let sharedReserved = preReserved;
     try {
+      if (options.signal?.aborted || Date.now() >= deadline || used >= 7) throw new Error('cancelled-or-budget');
+      const spec = method === 'GET' ? { method } as const : { method, body: { format: 'json' as const, valueEnv: bodyEnv! } };
+      const ordinal = ++used;
+      append({ event: 'reserved', ordinal, stepId, at: new Date().toISOString() });
       if (options.budget && !preReserved) { await options.budget.beforeRequest(reference, options.signal); sharedReserved = true; }
       const sentAt = Date.now();
       const r = await scopedRequest(scope, url, { ...credential, request: spec, environment: env, signal: options.signal,
@@ -76,7 +77,7 @@ export async function raceCheck(folder: string, scope: Scope, config: RaceCheck,
         factDigest: reply.factDigest, factKind: reply.factKind, startedAt: sentAt, endedAt: reply.endedAt });
       if (r.status >= 300 && r.status < 400 || r.status === 429 || r.status >= 500) throw new Error('unsafe-response');
       return reply;
-    } finally { if (sharedReserved) options.budget!.complete(reference); }
+    } finally { if (sharedReserved && options.budget) options.budget.complete(reference); }
   };
   const count = (step: string, expected: number) => replies.get(step)?.status === 200
     && replies.get(step)?.factKind === 'number' && replies.get(step)?.factDigest === digest(expected);
@@ -95,7 +96,6 @@ export async function raceCheck(folder: string, scope: Scope, config: RaceCheck,
     if (options.budget) await options.budget.beforeConcurrentPair(pair, options.signal);
     const outcomes = await Promise.allSettled([send('race-a', config.actionUrl, 'POST', bodyRefs[1], !!options.budget),
       send('race-b', config.actionUrl, 'POST', bodyRefs[1], !!options.budget)]);
-    if (options.budget) { options.budget.complete(pair[1]); options.budget.complete(pair[0]); }
     if (outcomes.some(outcome => outcome.status === 'rejected')) throw new Error('concurrent-request-failed');
     await send('race-after', config.raceStateUrl, 'GET');
   } catch (error) { stopped = options.signal?.aborted ? 'cancelled' : error instanceof Error ? error.message : 'execution-failed'; }

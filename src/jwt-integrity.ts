@@ -11,12 +11,15 @@ import { createSession, inspectSession, readJson, validateSession } from './sess
 import type { Session } from './session.ts';
 import type { ProgramBudget } from './budget.ts';
 
+export type JwtClaimValueType = 'auto' | 'string' | 'number' | 'boolean' | 'json';
 export type JwtIntegrityConfig = { schemaVersion: 1; policyReference: string; boundary: 'jwt-signature-integrity';
   url: string; request: RequestSpec; credentialEnv: string; proofPointer: string;
-  mutation: { claim: string; mode: 'add-canary' | 'replace'; valueEnv?: string } };
+  mutation: { claim: string; mode: 'add-canary' | 'replace'; valueEnv?: string; valueType?: JwtClaimValueType } };
 export type JwtIntegrityResult = { schemaVersion: 1; sessionId: string; scopeDigest: string; configDigest: string;
   status: 'confirmed' | 'not-reproduced' | 'unresolved'; reason: string; evidence: string[];
   limitation: string[] };
+
+const jwtValueTypes: JwtClaimValueType[] = ['auto', 'string', 'number', 'boolean', 'json'];
 
 export function validateJwtIntegrity(value: unknown, scope: Scope, checkTime = true): asserts value is JwtIntegrityConfig {
   validateScope(scope);
@@ -27,10 +30,11 @@ export function validateJwtIntegrity(value: unknown, scope: Scope, checkTime = t
     || typeof value.url !== 'string') throw new Error('Invalid JWT integrity contract');
   assertRequestAllowed(scope, value.url, value.request, checkTime ? Date.now() : Date.parse(scope.authorization.validFrom));
   validateProjections([{ name: 'proof', pointer: value.proofPointer }]);
-  optionalFields(value.mutation, ['claim', 'mode'], ['valueEnv']);
+  optionalFields(value.mutation, ['claim', 'mode'], ['valueEnv', 'valueType']);
   if (typeof value.mutation.claim !== 'string' || !/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(value.mutation.claim)
     || !['add-canary', 'replace'].includes(value.mutation.mode)
-    || (value.mutation.mode === 'add-canary' && value.mutation.valueEnv !== undefined)
+    || (value.mutation.valueType !== undefined && !jwtValueTypes.includes(value.mutation.valueType))
+    || (value.mutation.mode === 'add-canary' && (value.mutation.valueEnv !== undefined || value.mutation.valueType !== undefined))
     || (value.mutation.mode === 'replace' && (typeof value.mutation.valueEnv !== 'string'
       || !/^BBA_INPUT_[A-Z0-9_]{1,50}$/.test(value.mutation.valueEnv)))) throw new Error('Invalid JWT mutation');
 }
@@ -47,6 +51,38 @@ function decodePart(encoded: string): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
+function coerceReplacement(raw: string, existing: unknown, mode: JwtClaimValueType = 'auto'): unknown {
+  if (mode === 'string') return raw;
+  if (mode === 'number') {
+    if (!/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(raw) || !Number.isFinite(Number(raw))) {
+      throw new Error('Invalid numeric JWT replacement claim value');
+    }
+    return Number(raw);
+  }
+  if (mode === 'boolean') {
+    if (raw !== 'true' && raw !== 'false') throw new Error('Invalid boolean JWT replacement claim value');
+    return raw === 'true';
+  }
+  if (mode === 'json') {
+    try { return JSON.parse(raw); } catch { throw new Error('Invalid JSON JWT replacement claim value'); }
+  }
+  // mode === 'auto': preserva el tipo JSON original del claim cuando aplica.
+  if (typeof existing === 'number') {
+    if (!/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(raw) || !Number.isFinite(Number(raw))) {
+      throw new Error('Invalid numeric JWT replacement claim value');
+    }
+    return Number(raw);
+  }
+  if (typeof existing === 'boolean') {
+    if (raw !== 'true' && raw !== 'false') throw new Error('Invalid boolean JWT replacement claim value');
+    return raw === 'true';
+  }
+  if (Array.isArray(existing) || (existing !== null && typeof existing === 'object')) {
+    try { return JSON.parse(raw); } catch { throw new Error('Invalid JSON JWT replacement claim value'); }
+  }
+  return raw;
+}
+
 export function mutateOwnedJwt(token: string, config: JwtIntegrityConfig, environment: Record<string, string | undefined> = process.env): string {
   credentialFor(config.credentialEnv, token);
   const parts = token.split('.');
@@ -59,9 +95,14 @@ export function mutateOwnedJwt(token: string, config: JwtIntegrityConfig, enviro
   } else {
     if (!Object.hasOwn(payload, config.mutation.claim)) throw new Error('Claim to replace is absent');
     const replacement = environment[config.mutation.valueEnv!];
-    if (replacement === undefined || replacement.length < 1 || Buffer.byteLength(replacement) > 512
-      || replacement === payload[config.mutation.claim]) throw new Error('Missing or unchanged controlled claim value');
-    payload[config.mutation.claim] = replacement;
+    if (replacement === undefined || replacement.length < 1 || Buffer.byteLength(replacement) > 512) {
+      throw new Error('Missing or unchanged controlled claim value');
+    }
+    const nextValue = coerceReplacement(replacement, payload[config.mutation.claim], config.mutation.valueType ?? 'auto');
+    if (canonical(nextValue) === canonical(payload[config.mutation.claim])) {
+      throw new Error('Missing or unchanged controlled claim value');
+    }
+    payload[config.mutation.claim] = nextValue;
   }
   const altered = Buffer.from(JSON.stringify(payload)).toString('base64url');
   const result = `${parts[0]}.${altered}.${parts[2]}`;

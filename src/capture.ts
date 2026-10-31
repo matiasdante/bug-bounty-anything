@@ -53,14 +53,30 @@ export async function launchIsolated() {
   let leaks = 0;
   const sink = createServer(socket => { leaks++; socket.destroy(); });
   await new Promise<void>((resolve, reject) => { sink.once('error', reject); sink.listen(0, '127.0.0.1', resolve); });
-  try {
-    const browser = await chromium.launch({
-      headless: true,
-      proxy: { server: `http://127.0.0.1:${(sink.address() as AddressInfo).port}`, bypass: '<-loopback>' },
-      args: ['--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp'],
-    });
-    return { browser, leaks: () => leaks, close: async () => { await browser.close(); sink.close(); } };
-  } catch { sink.close(); throw new Error('Browser unavailable; run npx playwright-core install --only-shell chromium'); }
+  const baseOptions = {
+    headless: true,
+    proxy: { server: `http://127.0.0.1:${(sink.address() as AddressInfo).port}`, bypass: '<-loopback>' },
+    args: ['--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp'],
+  };
+  for (const channel of [undefined, 'chrome', 'msedge'] as const) {
+    try {
+      const browser = await chromium.launch(channel ? { ...baseOptions, channel } : baseOptions);
+      const originalNewContext = browser.newContext.bind(browser);
+      browser.newContext = (async (...args: Parameters<typeof originalNewContext>) => {
+        const ctx = await originalNewContext(...args);
+        await ctx.addInitScript(() => {
+          const deny = function () { throw new DOMException('WebRTC disabled in isolated browser', 'NotAllowedError'); };
+          for (const key of ['RTCPeerConnection', 'webkitRTCPeerConnection', 'mozRTCPeerConnection']) {
+            if (key in globalThis) Object.defineProperty(globalThis, key, { value: deny, writable: false, configurable: false });
+          }
+        });
+        return ctx;
+      }) as typeof browser.newContext;
+      return { browser, leaks: () => leaks, close: async () => { await browser.close(); sink.close(); } };
+    } catch { /* Intentamos con el siguiente canal Chromium local disponible. */ }
+  }
+  sink.close();
+  throw new Error('Browser unavailable; run npx playwright-core install --only-shell chromium');
 }
 
 const har = (entries: unknown[]) => ({ log: { version: '1.2', entries } });
@@ -104,7 +120,18 @@ export async function captureSurface(folder: string, scope: Scope, plan: Plan, o
       }
       if (stopReason) return await route.abort('blockedbyclient');
       const wait = Math.max(0, lastEnd + scope.limits.minIntervalMs - Date.now());
-      if (wait) await delay(wait);
+      if (Date.now() + wait >= deadline) {
+        stopReason = 'deadline';
+        return await route.abort('blockedbyclient');
+      }
+      if (wait) {
+        try {
+          await delay(wait, undefined, { signal: options.signal });
+        } catch {
+          stopReason = 'cancelled';
+          return await route.abort('blockedbyclient');
+        }
+      }
       if (options.signal?.aborted || Date.now() >= deadline) {
         stopReason = options.signal?.aborted ? 'cancelled' : 'deadline';
         return await route.abort('blockedbyclient');
@@ -152,7 +179,10 @@ export async function captureSurface(folder: string, scope: Scope, plan: Plan, o
         // Blocked or failed loads are recorded by the route handler, not here.
         await page.goto(step.url, { waitUntil: 'networkidle', timeout }).catch(() => {});
         // Late fetches and browser-initiated connections show up just after idle.
-        await page.waitForTimeout(Math.min(500, Math.max(0, deadline - Date.now()))).catch(() => {});
+        if (!options.signal?.aborted) {
+          await delay(Math.min(500, Math.max(0, deadline - Date.now())), undefined, { signal: options.signal }).catch(() => {});
+        }
+        if (options.signal?.aborted) { stopReason ??= 'cancelled'; break; }
         const dom = page.url() === step.url ? await page.evaluate(() => ({
           links: Array.from(document.querySelectorAll('a[href]')).slice(0, 200).map(a => a.getAttribute('href') || ''),
           forms: Array.from(document.querySelectorAll('form')).slice(0, 100).map(form => ({
