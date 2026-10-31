@@ -1,5 +1,7 @@
 # Connection and recovery
 
+[Español](connection-and-recovery.es.md) · **English**
+
 Use this only for an observed runtime/connection blocker. The skill can guide an
 investigation with existing tools without an MCP server. Do not probe unrelated
 client configuration or reinstall dependencies before identifying the failure.
@@ -10,12 +12,16 @@ client configuration or reinstall dependencies before identifying the failure.
   executable and `args` contains the absolute built CLI path. Keep it as an
   argument array, with working directory/output paths in the case workspace.
 - Repository: `node src/cli.ts --help`; built package: `node dist/cli.js --help`.
-  Node 26+ is required. No published registry package is assumed; do not run
-  `npx bug-bounty-anything` or fetch a similarly named package.
+  Node 22.13+ is required. For a one-off run, use
+  `npx --yes bug-bounty-anything@latest --help` from the public npm registry.
+  Confirm the package identity before using a similarly named package.
 - Missing built CLI: from the trusted package source run `npm run build` with
   existing prerequisites. If the package moved, install to a new skill directory
   from its current location or update only the stale runtime path under the
   host's actual write permissions. Do not overwrite another installation.
+- For persistent skill or MCP setup, prefer
+  `npm install --global bug-bounty-anything@latest`: registrations retain the
+  CLI path, while a temporary `npx` cache entry may be removed.
 - To install explicitly: `node dist/cli.js install-skill --out <new-skill-directory>`.
   In this user's environment personal skills live in `~/.agents/skills/`.
   The command copies instructions/references/UI metadata and records the runtime
@@ -26,7 +32,7 @@ client configuration or reinstall dependencies before identifying the failure.
   the runtime's package binding, rejects linked resources, backs up managed
   resources under `.bba-backups/` and preserves unrelated files. It does not
   update dependencies or MCP. Review the reported backup; do not delete a
-  stale `.bba-update.lock` until checking an interrupted update's files.
+  stale `.bba-update.lock.sqlite` until checking an interrupted update's files.
 
 Skill discovery can require a fresh chat or restart. A directory on disk is not
 proof that the current agent's skill catalog refreshed. Reading its `SKILL.md`
@@ -82,5 +88,3 @@ specific launch/policy error. Do not repeat setup or claim the CLI proved MCP wo
 MCP paths are confined to `--root`; keep scope/input/output files there. A scope
 is an operator assertion, not a signed program policy. Anyone who can edit it
 can change its claims, so review workspace write access before enabling network.
-a valid, reviewed scope. Reconnect Codex and confirm `tools/list` after setup.
- a valid, reviewed scope. Reconnect Codex and confirm `tools/list` after setup.

@@ -1,5 +1,7 @@
 # Integridad de JWT firmado
 
+**Español** · [English](JWT-INTEGRITY.en.md)
+
 Este bloque responde una pregunta acotada: ¿el servicio acepta un JWT de una
 cuenta de prueba propia después de cambiar su payload **sin volver a firmarlo**?
 Un resultado positivo demuestra que esa ruta aceptó un token cuya firma ya no

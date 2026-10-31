@@ -1,5 +1,7 @@
 # Pruebas de XSS y CORS en Chromium
 
+**Español** · [English](BROWSER-CHECKS.en.md)
+
 `browser-check --scope scope.json --config browser.json --out <carpeta-nueva>` y MCP `browser_check` ejecutan comparaciones finitas sobre datos y orígenes controlados. Requieren Chromium instalado y scope/técnicas autorizados. La presencia de headers o texto reflejado no alcanza como prueba.
 
 Todas las solicitudes pasan por el transporte de BBA. Solo salen GET cuya URL completa y método coincidan con los pasos declarados y sus inputs del entorno. Se preservan headers CSP, CORS, aislamiento de orígenes y `nosniff`; no se siguen redirects. Service workers, WebSockets, descargas y accesos fuera del plan están bloqueados. Se mantienen el proxy sumidero y la política WebRTC. Un presupuesto compartido se aplica cuando el scope incluye `budgetId`.

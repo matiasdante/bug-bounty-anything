@@ -1,5 +1,7 @@
 # Investigación desde superficie y evidencia semántica
 
+**Español** · [English](INVESTIGATION.en.md)
+
 La skill prepara estos contratos a partir del servicio, su documentación y la política vigente. El operador aporta cuentas controladas y reglas de negocio que no puedan comprobarse públicamente. Una importación o una regla escrita no demuestra autorización real.
 
 ## Recorrido

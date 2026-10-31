@@ -1,5 +1,7 @@
 # Pruebas acotadas de entrada (1.9.0)
 
+**Español** · [English](INPUT-PROOFS.en.md)
+
 Estas dos herramientas reutilizan el scope exacto, `requestRules`, el presupuesto
 compartido y los checkpoints SQLite. Sus entradas se generan o ligan al config;
 las credenciales salen del entorno. Una ejecución incompleta conserva las

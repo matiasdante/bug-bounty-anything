@@ -12,7 +12,7 @@ export function installSkill(folder: string, update = false) {
   const cli = join(root, 'dist', 'cli.js');
   if (!existsSync(cli)) throw new Error('Build the package before installing the skill');
   const out = resolve(folder);
-  const names = ['SKILL.md', 'README.md', 'references', 'docs', 'agents', 'cases'];
+  const names = ['SKILL.md', 'SKILL.es.md', 'README.md', 'README.en.md', 'references', 'docs', 'agents', 'cases'];
   const tree = (path: string, relative = ''): string[] => {
     const stat = lstatSync(path);
     if (stat.isSymbolicLink()) throw new Error('Skill resources cannot be links');

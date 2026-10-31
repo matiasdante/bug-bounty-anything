@@ -1,5 +1,7 @@
 # Reporting and responsible disclosure
 
+[Español](reporting.es.md) · **English**
+
 A finding is only worth something once it's reported through the right
 channel, in a form the triager can act on without extra back-and-forth.
 Build the report from the finding ledger kept during testing — don't

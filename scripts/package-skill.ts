@@ -135,6 +135,8 @@ Store case outputs in the investigation workspace, outside the skill folder.
 
 const claudeInstallDoc = `# BBA for Claude Code & Gemini
 
+[Español](INSTALL-CLAUDE-CODE.es.md) · **English**
+
 Extract \`bug-bounty-anything\` under \`<project>/.claude/skills/\` or \`~/.claude/skills/\`.
 Requires Node.js 22.13 or later.
 
@@ -146,6 +148,23 @@ node <skill-folder>/dist/cli.js setup-mcp --client gemini --root <workspace> --a
 \`\`\`
 
 Add \`--allow-network\` only when active testing is authorized by a valid per-target scope.
+`;
+
+const claudeInstallDocEs = `# BBA para Claude Code y Gemini
+
+**Español** · [English](INSTALL-CLAUDE-CODE.md)
+
+Descomprimí \`bug-bounty-anything\` en \`<proyecto>/.claude/skills/\` o \`~/.claude/skills/\`.
+Requiere Node.js 22.13 o posterior.
+
+Registrá el servidor MCP offline con el instalador multicliente de BBA:
+
+\`\`\`text
+node <carpeta-skill>/dist/cli.js setup-mcp --client claude --root <workspace> --apply
+node <carpeta-skill>/dist/cli.js setup-mcp --client gemini --root <workspace> --apply
+\`\`\`
+
+Agregá \`--allow-network\` solo cuando un scope vigente del target autorice las pruebas activas.
 `;
 
 export function packageSkill(options: { projectRoot?: string; outputPath?: string; includeNodeModules?: boolean } = {}): {
@@ -182,6 +201,9 @@ export function packageSkill(options: { projectRoot?: string; outputPath?: strin
   const items = [
     'package.json',
     'package-lock.json',
+    'README.md',
+    'README.en.md',
+    'SKILL.es.md',
     'dist',
     'docs',
     'references',
@@ -194,6 +216,7 @@ export function packageSkill(options: { projectRoot?: string; outputPath?: strin
   const zipEntries: ZipEntryInput[] = [
     { name: `${prefix}SKILL.md`, data: Buffer.from(skill, 'utf8') },
     { name: `${prefix}INSTALL-CLAUDE-CODE.md`, data: Buffer.from(claudeInstallDoc, 'utf8') },
+    { name: `${prefix}INSTALL-CLAUDE-CODE.es.md`, data: Buffer.from(claudeInstallDocEs, 'utf8') },
   ];
 
   for (const item of items) {

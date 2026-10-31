@@ -1,5 +1,7 @@
 # Persistencia implementada
 
+**Español** · [English](database.en.md)
+
 Cada ejecución estática tiene `session.sqlite` y `execution-lock.sqlite`. Cada presupuesto compartido tiene `budget.sqlite` y `lock.sqlite`. Las tablas `owner` permanecen vacías: una transacción `BEGIN IMMEDIATE` mantiene el lock del proceso y el sistema operativo lo libera al morir.
 
 Los nombres del diagrama identifican archivo y tabla; no son tablas adicionales. No hay claves foráneas SQL entre archivos. Las referencias `sessionId:stepId` de los eventos y los hechos seleccionados viven dentro del JSON de `body` y se validan en la aplicación.

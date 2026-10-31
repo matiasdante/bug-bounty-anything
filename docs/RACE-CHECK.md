@@ -1,5 +1,7 @@
 # Carrera de operación de uso único (1.9.0)
 
+**Español** · [English](RACE-CHECK.en.md)
+
 `race-check` / `race_check` prueba una sola regla de uso único sobre **dos
 recursos descartables propios**. El config incluye `schemaVersion: 1`,
 `class: "single-use-race"`, `policyReference`, `credentialEnv`, `actionUrl`,

@@ -1,5 +1,7 @@
 # Scope and authorization
 
+[Español](scope-and-authorization.es.md) · **English**
+
 This is the gate every other part of BBA sits behind. Work through it
 before active testing, including read-only probes and introspection.
 Reading public policy/contact pages is allowed to establish authorization;

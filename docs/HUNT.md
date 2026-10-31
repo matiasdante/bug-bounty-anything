@@ -1,5 +1,7 @@
 # Objetivo y flujo autónomo de BBA
 
+**Español** · [English](HUNT.en.md)
+
 Objetivo principal: partiendo de una web autorizada, descubrir superficie, generar y ejecutar hipótesis, confirmar una vulnerabilidad con controles, documentar su prueba y dejar el reporte listo para revisión y envío al bug bounty. Las cuentas, reglas y alcance se configuran una vez; el framework debe proponer y ejecutar pruebas dentro de esos límites, sin exigir una lista manual de bugs esperados.
 
 ## Implementación actual

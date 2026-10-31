@@ -40,10 +40,10 @@ per-target scope; do not infer that a connected MCP grants target permission.
 Reconnect Claude Code and inspect `/mcp` after changing the registration.
 
 '@
-$skill = Replace-Section $skill 'For a requested Codex connection,' 'Use `capabilities` when coverage is uncertain;' $connection
+$skill = Replace-Section $skill 'For a requested MCP connection,' 'Use `capabilities` when coverage is uncertain;' $connection
 $runtime = @'
 Without MCP, use `node dist/cli.js` from this extracted skill folder. The
-runtime and `playwright-core` are bundled here; Node.js 26 or later is required.
+runtime and `playwright-core` are bundled here; Node.js 22.13 or later is required.
 Store case outputs in the investigation workspace, outside the skill folder.
 
 '@
@@ -52,6 +52,8 @@ $skill = Replace-Section $skill 'Without MCP, use the local CLI.' 'If the runtim
 $install = @'
 # BBA for Claude Code
 
+[Español](INSTALL-CLAUDE-CODE.es.md) · **English**
+
 This ZIP is a filesystem skill, not a direct Claude Code upload. Extract its
 `bug-bounty-anything` folder under either `<project>/.claude/skills/` or
 `~/.claude/skills/`. Claude Code then finds `SKILL.md` and the supporting files.
@@ -59,7 +61,7 @@ This variant is manually invoked with `/bug-bounty-anything`; it will not
 activate itself on unrelated conversations. Claude Code's safety review still
 applies when you invoke it.
 
-Requires Node.js 26 or later. The ZIP includes the compiled CLI and
+Requires Node.js 22.13 or later. The ZIP includes the compiled CLI and
 `playwright-core`; it does not include Chromium. From the extracted folder,
 check the runtime with `node dist/cli.js capabilities`.
 
@@ -89,6 +91,44 @@ through `BBA_TOKEN_*`, `BBA_COOKIE_*` and other documented environment names,
 never as MCP arguments. The skill and MCP do not authenticate a program policy
 or guarantee a vulnerability on any target.
 '@
+$installEs = @'
+# BBA para Claude Code
+
+**Español** · [English](INSTALL-CLAUDE-CODE.md)
+
+Este ZIP contiene una skill de archivos. Descomprimí `bug-bounty-anything` en
+`<proyecto>/.claude/skills/` o `~/.claude/skills/`. Claude Code detecta
+`SKILL.md` y sus archivos de apoyo. Esta variante se invoca manualmente con
+`/bug-bounty-anything`; la revisión de seguridad de Claude Code sigue vigente.
+
+Requiere Node.js 22.13 o posterior. El ZIP incluye CLI compilado y
+`playwright-core`, pero no Chromium. Desde la carpeta extraída, comprobá
+`node dist/cli.js capabilities`.
+
+Para registrar MCP offline, ejecutá desde el proyecto de investigación con
+rutas absolutas reales:
+
+```text
+claude mcp add --transport stdio bba -- node <carpeta-skill-absoluta>/dist/cli.js mcp --root <workspace-investigacion-absoluto>
+claude mcp get bba
+```
+
+El modo inicial expone solo herramientas offline. Si el programa permite
+pruebas activas y preparaste un scope vigente y exacto, registrá con
+`--allow-network` después del workspace. Revisá cualquier registro existente
+y reemplazalo deliberadamente; no reinicies presupuestos. Reconectá Claude
+Code, inspeccioná `/mcp` e invocá `/bug-bounty-anything`.
+
+Chromium hace falta solo para captura y pruebas de navegador. Si se necesita:
+
+```text
+node <carpeta-skill-absoluta>/node_modules/playwright-core/cli.js install --only-shell chromium
+```
+
+La descarga va fuera del ZIP. Las credenciales se pasan mediante `BBA_TOKEN_*`,
+`BBA_COOKIE_*` y otras variables documentadas, nunca como argumentos MCP.
+La skill y MCP no autentican una política ni garantizan fallas en un target.
+'@
 
 $archive = [System.IO.Compression.ZipFile]::Open($partial, [System.IO.Compression.ZipArchiveMode]::Create)
 try {
@@ -113,7 +153,8 @@ try {
   }
   Add-Text 'SKILL.md' $skill
   Add-Text 'INSTALL-CLAUDE-CODE.md' $install
-  foreach ($item in @('package.json', 'package-lock.json', 'dist', 'docs', 'references', 'agents', 'cases', 'node_modules/playwright-core')) {
+  Add-Text 'INSTALL-CLAUDE-CODE.es.md' $installEs
+  foreach ($item in @('package.json', 'package-lock.json', 'README.md', 'README.en.md', 'SKILL.es.md', 'dist', 'docs', 'references', 'agents', 'cases', 'node_modules/playwright-core')) {
     $path = Join-Path $projectRoot $item
     if (-not (Test-Path -LiteralPath $path)) { throw "Missing package item: $item" }
     if ((Get-Item -LiteralPath $path).PSIsContainer) {

@@ -1,5 +1,7 @@
 # Expediente de campaña (1.9.0)
 
+**Español** · [English](CAMPAIGNS.en.md)
+
 El expediente coordina una investigación de un solo objetivo. Conserva la fuente
 de alcance, la revisión de política, la superficie, el perfil de cuentas propias,
 la ejecución y el borrador. Cada enlace queda en un journal con digest encadenado.

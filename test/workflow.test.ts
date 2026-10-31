@@ -78,6 +78,7 @@ test('install-skill copies usable references and binds a compiled runtime withou
     assert.equal(JSON.parse(installed.stdout).mcpConfigurationChanged, false);
     const skill = await readFile(join(out, 'SKILL.md'), 'utf8');
     for (const match of skill.matchAll(/\]\(((?:references|docs)\/[^)]+)\)/g)) await access(join(out, match[1]));
+    for (const path of ['SKILL.es.md', 'README.en.md', 'docs/ROADMAP.en.md', 'references/scope-and-authorization.es.md']) await access(join(out, path));
     await access(join(out, 'agents', 'openai.yaml'));
     const runtime = JSON.parse(await readFile(join(out, 'runtime.json'), 'utf8'));
     const help = await exec(runtime.command, ['--no-experimental-strip-types', ...runtime.args, '--help'], { cwd: root });

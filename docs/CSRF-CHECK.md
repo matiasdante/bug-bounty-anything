@@ -1,5 +1,7 @@
 # Formulario de otro origen y estado propio (1.9.0)
 
+**Español** · [English](CSRF-CHECK.en.md)
+
 `csrf-check` / `csrf_check` usa Chromium para enviar **un** formulario POST
 desde un origen atacante declarado hacia una acción de una cuenta propia.
 El config lleva `schemaVersion: 1`, `class: "cross-origin-form"`,

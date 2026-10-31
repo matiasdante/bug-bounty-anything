@@ -1,5 +1,7 @@
 # Known vulnerabilities and version deltas
 
+[Español](known-vulns-and-deltas.es.md) · **English**
+
 Check this before inventing a novel attack. A target running an
 identifiable, outdated component often already has a public advisory —
 confirming that is faster and more reliable than discovering a new issue,

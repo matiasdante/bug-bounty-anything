@@ -1,5 +1,7 @@
 # Núcleo de ejecución
 
+**Español** · [English](EXECUTION.en.md)
+
 Este bloque ejecuta planes HTTP finitos con alcance verificable por código y conserva intentos entre procesos. Las respuestas HTTP son observaciones; las [comprobaciones semánticas](INVESTIGATION.md) y las [pruebas de navegador](BROWSER-CHECKS.md) agregan sus propios criterios de confirmación. `lab` conserva su formato anterior.
 
 ## Preparar un scope
@@ -96,4 +98,4 @@ Los comandos antiguos `lab`, `inspect` y `report` siguen leyendo/escribiendo bun
 
 La suite usa HTTP real en loopback, incluyendo caída de proceso, cancelación, contención de locks, expiración, cambios de scope, presupuesto persistido, límites de respuesta y corrupción. DNS público se comprueba además con un resolver controlado. El piloto público DCS de 1.2 comprobó tres GET HTTPS y una captura de inicio con el presupuesto común; los escenarios de permisos e inputs se verifican en laboratorios controlados, sin extrapolarlos a ese sitio.
 
-Node valida los contratos en ejecución y elimina los tipos. `npm run check` agrega TypeScript estricto para fuentes/scripts, y `npm run verify` ejecuta check, tests y build. No hay linter ni proveedor CI configurados. El núcleo usa bibliotecas de Node; `playwright-core` sirve captura y pruebas de navegador. TypeScript y tipos de Node son dependencias de desarrollo.
+Node valida los contratos en ejecución y elimina los tipos. `npm run check` agrega TypeScript estricto para fuentes/scripts, y `npm run verify` ejecuta check, build y tests. GitHub Actions corre esa verificación en Ubuntu y Windows; no hay linter configurado. El núcleo usa bibliotecas de Node; `playwright-core` sirve captura y pruebas de navegador. TypeScript y tipos de Node son dependencias de desarrollo.

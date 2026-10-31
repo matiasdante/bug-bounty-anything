@@ -1,5 +1,7 @@
 # Roadmap interno — BBA
 
+**Español** · [English](ROADMAP.en.md)
+
 Actualizado: 2026-10-31. La versión **2.0.0** consolida correcciones de transporte/protocolo/aislamiento, unifica la arquitectura CLI/MCP sobre esquemas declarativos y suma doce capacidades nuevas manteniendo cero dependencias externas adicionales y preservando los invariantes de alcance, presupuesto y cero persistencia de secretos.
 
 Objetivo: investigación reproducible de web/API, con skill, CLI/MCP, motor local, adaptadores, evidencia persistente, evaluación controlada y piloto sobre un programa con bug bounty. Distinguir detección automatizada, investigación asistida e indicios por capacidad. No prometer cobertura universal ni exigir un hallazgo productivo para declarar honesto el resultado.
@@ -15,7 +17,7 @@ Objetivo: investigación reproducible de web/API, con skill, CLI/MCP, motor loca
 | 4c. Expediente y ejecución guiada | 1.6.0: ledger de campaña con alcance/política/evidencia enlazados; `campaign_capture` y `campaign_execute` usan la autorización declarada y el presupuesto compartido | Un intento por captura/perfil, bloqueo de acciones interrumpidas, informe de cobertura y borrador. La veracidad de la política y las reglas de negocio sigue a cargo del operador. |
 | 4d. Pruebas acotadas de otras clases | 1.9.0: plantilla aritmética, callback propio, exposición entre identidades correlacionada con cache, carrera de uso único y formulario de otro origen | Controles negativos, rutas exactas, presupuesto compartido, evidencia y reporte de cinco secciones. Requieren cuentas/recursos propios y reglas explícitas; no son detectores genéricos de cada familia. |
 | 5. Adaptadores | Implementado en 0.7.0 solo por importación (ZAP, Nuclei, Subfinder); BBA no ejecuta scanners ni consulta advisories | ZAP, Nuclei revisado/versionado y Subfinder; advisories y deltas. Normalizar resultados, respetar presupuestos y validar candidatos antes de confirmar. |
-| 6. Producto utilizable | CLI/MCP, capacidades, vistas/comparación de evidencia, `doctor`, instalación/actualización con backup y TypeScript estricto | `npm run verify` combina check/tests/build. MCP expone red solo con `--allow-network`; no hay proveedor CI configurado. |
+| 6. Producto utilizable | CLI/MCP, capacidades, vistas/comparación de evidencia, `doctor`, instalación/actualización con backup y TypeScript estricto | `npm run verify` combina check/build/tests y GitHub Actions lo ejecuta en Ubuntu y Windows. MCP expone red solo con `--allow-network`. |
 | 7. RC y piloto productivo | Suite local completa, chequeo TypeScript estricto, doctor, validación de skill y piloto de navegación pública en DCS | Falta validación con cuentas controladas en un servicio real y un programa externo de bounty. Un sitio público sin hallazgos no valida todas las clases. |
 
 ## Decisiones de implementación

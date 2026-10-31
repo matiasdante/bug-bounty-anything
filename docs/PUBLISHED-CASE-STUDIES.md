@@ -1,5 +1,7 @@
 # Estudios reproducibles de casos publicados
 
+**Español** · [English](PUBLISHED-CASE-STUDIES.en.md)
+
 El primer estudio toma como referencia metodológica [el artículo de Faav sobre Titan](https://blog.faav.net/how-i-couldve-accessed-17-trillion-microsoft-records). El manifiesto `cases/faav-titan-jwt-2026.json` identifica la publicación y la clase de falla; no contiene tokens, datos del servicio ni un objetivo autorizado. La investigación del artículo y una reproducción actual son cosas distintas.
 
 ## Recorrido del agente

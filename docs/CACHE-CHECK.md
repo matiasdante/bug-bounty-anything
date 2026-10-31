@@ -1,5 +1,7 @@
 # Exposición correlacionada con cache (1.9.0)
 
+**Español** · [English](CACHE-CHECK.en.md)
+
 `cache-check` / `cache_check` ejecuta siete GET exactos contra un recurso propio
 con dos cuentas controladas. El config lleva `schemaVersion: 1`,
 `class: "cross-identity-cache"`, `policyReference`, `identityUrl`,

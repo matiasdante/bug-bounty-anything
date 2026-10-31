@@ -1,5 +1,7 @@
 # Escenarios controlados con sesión real de navegador
 
+**Español** · [English](SCENARIOS.en.md)
+
 ```powershell
 node dist/cli.js browser-scenario --scope scope.json --config scenario.json --out runs/scenario
 ```

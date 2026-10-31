@@ -7,6 +7,8 @@ metadata:
 
 # BBA — Bug Bounty Anything
 
+[Español](SKILL.es.md) · **English**
+
 Turn “mirá este servicio y buscá bugs” into an investigation, not a list of
 commands for the user to run. Resolve the target, establish scope, discover
 the surface, choose hypotheses, collect minimal proof and prepare the report.

@@ -1,5 +1,7 @@
 # BBA — Bug Bounty Anything
 
+**Español** · [English](README.en.md)
+
 Skill y motor local de descubrimiento, comprobación y documentación de vulnerabilidades con evidencia verificable. Al invocarlo sobre un servicio autorizado, el agente resuelve alcance y política, prepara el expediente, proyecta superficie y ejecuta comparaciones acotadas hasta generar el borrador. La versión `2.0.0` unifica el registro declarativo CLI/MCP, baja el piso de runtime a Node.js `>=22.13.0`, agrega soporte bilingüe (`--lang es|en`, español por defecto) y suma comprobadores de autorización GraphQL, conformidad OAuth 2.0 `redirect_uri`, redirección abierta, mutaciones/mass-assignment sobre recursos descartables, variantes JWT `alg=none`/`expired-token`, carreras multiplexadas sobre HTTP/2, bootstrap efímero de credenciales en memoria, importación offline de políticas y bundles JS/SourceMap, compilación de candidatos a planes, plantillas de envío con línea base CVSS v3.1/v4.0, firma criptográfica Ed25519 e inspector HTML local en `127.0.0.1`. El [roadmap](docs/ROADMAP.md) detalla el estado real y los límites de cada bloque.
 
 `investigate` compila hipótesis desde superficie importada y reglas declaradas; confirma BOLA, BFLA, exposición de propiedades, aislamiento de tenants y mutación/mass-assignment sobre recursos descartables verificando identidades del servidor y estado antes/después. `graphql-check` verifica autorización por operación GraphQL. `oauth-check` y `redirect-check` clasifican cabeceras `Location` 3xx sin seguir redirecciones ni persistir códigos o query strings. `browser-check` verifica XSS por ejecución de marcador y CORS por lectura real en Chromium con aislamiento WebRTC reforzado. `hunt` conserva su descubrimiento HTML y prueba BOLA especializada. `evaluate-run` sigue siendo el comparador de hashes (`needs-validation`). Los importadores de scanners (`import-candidates`) y políticas (`import-policy`) operan offline sin validar ni expandir comodines automáticamente.
@@ -173,14 +175,22 @@ El conjunto está congelado por un digest de ids, grupos y resultados esperados 
 
 ## Instalación, diagnóstico y MCP
 
+Para usar el CLI una vez desde npm, sin instalarlo de forma global:
+
 ```powershell
-npm install
-npm run build
-npm pack
-npm install -g ./bug-bounty-anything-2.0.0.tgz
-npx playwright-core install --only-shell chromium
+npx --yes bug-bounty-anything@latest capabilities
+npx --yes bug-bounty-anything@latest --help
+```
+
+`npx` descarga el paquete publicado y ejecuta su comando `bba`. Para registrar una skill o MCP de forma persistente, instalá el paquete globalmente: los registros guardan la ruta del CLI y una entrada temporal de la caché de `npx` podría desaparecer.
+
+```powershell
+npm install --global bug-bounty-anything@latest
+bba install-skill --out "$env:USERPROFILE/.agents/skills/bug-bounty-anything"
 bba doctor
 ```
+
+Para pruebas de navegador, instalá Chromium aparte con `npx playwright-core install --only-shell chromium`. Desde el repositorio fuente, `npm install`, `npm run build` y `npm test` siguen siendo los comandos de desarrollo. El paquete público y su código están bajo [licencia MIT](LICENSE).
 
 El paquete instalado es JavaScript compilado en `dist/` y expone el comando `bba` (incluidos subcomandos jerárquicos `bba campaign ...`, `bba check ...`, `bba study ...`, ayuda puntual `<comando> --help` e idioma `--lang es|en`).
 
