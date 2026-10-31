@@ -45,6 +45,7 @@ This creates a scope copy, anonymous GET seed plan, checksummed case record, and
 ## Requirements and local run
 
 - Node.js **22.13.0 or newer**, with npm. Node provides TypeScript type stripping during development and native SQLite. The only production dependency is `playwright-core` 1.64.1 (Apache-2.0).
+- For development or tests on Node 22.13, enable native TypeScript stripping with `$env:NODE_OPTIONS = '--experimental-strip-types'` in PowerShell. The published package runs compiled JavaScript and does not need this option.
 - Run `npm install` and `npx playwright-core install --only-shell chromium` for capture and browser checks. Chromium downloads outside the repository. Other commands do not require it.
 - Local labs and the inspector need connections to `127.0.0.1`. If a sandbox blocks loopback, run from a local terminal where it is allowed.
 

@@ -55,6 +55,7 @@ Genera `scope.json`, un `plan.json` GET anónimo a la semilla, `case.json` con c
 ## Requisitos y ejecución
 
 - Node.js **22.13.0 o posterior** (incluidos Node 22 LTS, 24 y 26), con npm.
+- Para desarrollar o correr tests sobre Node 22.13, habilitá el stripping nativo de TypeScript con `$env:NODE_OPTIONS = '--experimental-strip-types'` en PowerShell. El paquete publicado ejecuta JavaScript compilado y no necesita esa opción.
 - TypeScript (strip-types nativo en desarrollo y JS compilado en `dist/`) y SQLite (`node:sqlite`) provistos por Node. Única dependencia de producción: `playwright-core` 1.64.1 (Apache-2.0), para captura, inspección de páginas y pruebas de navegador. Para usarlo: `npm install` y `npx playwright-core install --only-shell chromium` (descarga el navegador a `%LOCALAPPDATA%\ms-playwright` o `~/.cache/ms-playwright`, fuera del repo). Los demás comandos no necesitan Chromium.
 - El sistema debe permitir conexiones a `127.0.0.1` para laboratorios locales y el inspector UI. Algunos sandboxes bloquean loopback; en ese caso ejecutá los comandos desde una terminal local habilitada sin desactivar controles del sistema.
 
