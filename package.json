@@ -4,6 +4,9 @@
   "type": "module",
   "description": "Local, evidence-backed vulnerability investigation lab",
   "license": "MIT",
+  "contentPolicy": {
+    "class": "dual-use"
+  },
   "author": "Matias Ezequiel Dante Sarco",
   "repository": {
     "type": "git",
@@ -40,6 +43,7 @@
     "SKILL.md",
     "SKILL.es.md",
     "LICENSE",
+    "DISCLOSURE",
     "docs",
     "references",
     "agents",

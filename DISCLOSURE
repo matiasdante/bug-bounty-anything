@@ -1,0 +1,36 @@
+English:
+
+BBA is a security research CLI and agent skill for investigating authorized
+services and controlled local labs. It can import API and browser surface data,
+run bounded HTTP and Chromium checks, and prepare evidence for authorization,
+input, session, and browser security findings. These capabilities can also be
+misused against services without permission.
+
+The intended use is bug bounty research, penetration testing, and defensive
+validation under the asset owner's authorization and current program rules.
+Active checks require an explicit target scope, authorization window, request
+limits, and, where relevant, accounts or resources controlled by the operator.
+The tool does not establish permission on its own or submit reports
+automatically. Scanner output and policy documents are imported offline.
+
+Operators are responsible for obtaining authorization, respecting exclusions
+and rate limits, and reviewing findings before disclosure.
+
+Español:
+
+BBA es un CLI y una skill para investigar servicios autorizados y laboratorios
+locales controlados. Puede importar superficies de API y navegador, ejecutar
+pruebas HTTP y Chromium acotadas, y preparar evidencia de fallas de
+autorización, entradas, sesiones y seguridad del navegador. Estas capacidades
+también podrían usarse indebidamente contra servicios sin permiso.
+
+Su uso previsto es la investigación en programas de bug bounty, pruebas de
+penetración y validación defensiva con autorización del propietario y bajo
+las reglas vigentes. Las pruebas activas requieren un alcance explícito, una
+ventana de autorización, límites de solicitudes y, cuando corresponda,
+cuentas o recursos controlados por el operador. La herramienta no acredita
+por sí misma el permiso ni envía reportes automáticamente. Los resultados de
+scanners y los documentos de políticas se importan sin acceso a la red.
+
+El operador debe obtener autorización, respetar exclusiones y límites de
+solicitudes, y revisar los hallazgos antes de divulgarlos.
