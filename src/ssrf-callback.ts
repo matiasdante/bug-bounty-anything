@@ -2,11 +2,12 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { digest } from './contracts.ts';
 import { executeSession } from './execution.ts';
-import { fields, strictUrl, validatePlan, validateScope } from './scope.ts';
+import { fields, matchesScopeRule, queryParamNameRegex, strictUrl, validatePlan, validateScope } from './scope.ts';
 import type { Plan, Scope } from './scope.ts';
 import { createSession, readJson } from './session.ts';
 import type { Session } from './session.ts';
 import type { ProgramBudget } from './budget.ts';
+import type { Lang } from './i18n.ts';
 
 export type SsrfCallback = { schemaVersion: 1; class: 'outbound-fetch'; policyReference: string;
   triggerUrl: string; queryName: string; credentialEnv: string | null;
@@ -28,7 +29,7 @@ export function validateSsrfCallback(value: unknown, scope: Scope): asserts valu
   fields(value, ['schemaVersion', 'class', 'policyReference', 'triggerUrl', 'queryName', 'credentialEnv', 'callbackUrl', 'receiptUrl', 'receiptPointer']);
   if (value.schemaVersion !== 1 || value.class !== 'outbound-fetch'
     || typeof value.policyReference !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9 ._:/-]{0,199}$/.test(value.policyReference)
-    || typeof value.queryName !== 'string' || !/^[A-Za-z0-9_.-]{1,64}$/.test(value.queryName)
+    || typeof value.queryName !== 'string' || value.queryName.length > 64 || !queryParamNameRegex.test(value.queryName)
     || value.credentialEnv !== null && (typeof value.credentialEnv !== 'string' || !/^BBA_(TOKEN|COOKIE)_[A-Z0-9_]{1,50}$/.test(value.credentialEnv))
     || typeof value.receiptPointer !== 'string' || !/^(\/(?:[^~]|~[01])*)?$/.test(value.receiptPointer))
     throw new Error('Invalid SSRF callback config');
@@ -36,8 +37,8 @@ export function validateSsrfCallback(value: unknown, scope: Scope): asserts valu
   if (trigger.origin === callback.origin || callback.origin !== receipt.origin
     || callback.pathname === receipt.pathname || callback.pathname.length < 14
     || !/\/[A-Za-z0-9_-]{12,}$/.test(callback.pathname)) throw new Error('Distinct owned callback with an opaque path token is required');
-  if (!scope.allowed.some(rule => rule.origin === callback.origin && rule.paths.includes(callback.pathname))
-    || scope.excluded.some(rule => rule.origin === callback.origin && rule.paths.includes(callback.pathname)))
+  if (!scope.allowed.some(rule => matchesScopeRule(rule, callback))
+    || scope.excluded.some(rule => matchesScopeRule(rule, callback)))
     throw new Error('Owned callback URL must be declared in scope');
   if (scope.limits.maxRequests < 4) throw new Error('Callback proof needs four request reservations');
   validatePlan(plan(value as SsrfCallback), scope);
@@ -62,7 +63,16 @@ export function evaluateSsrfCallback(session: Session, config: SsrfCallback) {
       'The operator must verify that the receiver reports only actual inbound callbacks for this opaque path, and that the application policy forbids this destination.',
       'The receiver may get one extra server-side request outside the BBA client budget; its own logs and policy remain the operator responsibility.'] };
 }
-function report(result: ReturnType<typeof evaluateSsrfCallback>, config: SsrfCallback): string {
+function report(result: ReturnType<typeof evaluateSsrfCallback>, config: SsrfCallback, lang: Lang = 'es'): string {
+  if (lang === 'en') {
+    return `# BBA — outbound-fetch: ${result.status}\n\nLocal draft; not submitted.\n\n`
+      + `## What it is\n\nPotential server outbound fetch toward an owned external destination under declared rule ${config.policyReference}.\n\n`
+      + `## How it was found\n\nPresented an opaque owned-receiver URL in parameter \`${config.queryName}\` of \`${config.triggerUrl}\` and compared before/after receipts.\n\n`
+      + `## Exploitability proof\n\nStatus: **${result.status}**. ${result.reason} Evidence: ${result.evidence.map(id => '`' + id + '`').join(', ')}.\n\n`
+      + `## Reproduction\n\nWith the same scope, configure an owned receiver reporting a boolean per unique token, verify unseen baseline, call the exact endpoint with the owned URL, and poll at most twice.\n\n`
+      + `## Remediation\n\nValidate permitted destinations server-side before fetching; block private, loopback, and metadata addresses at connection time.\n\n`
+      + `## Limitations\n\n${result.limitations.map(item => '- ' + item).join('\n')}\n`;
+  }
   return `# BBA — outbound-fetch: ${result.status}\n\nBorrador no enviado.\n\n`
     + `## Qué es\n\nPosible fetch del servidor hacia un destino externo propio bajo la regla declarada ${config.policyReference}.\n\n`
     + `## Cómo se encontró\n\nSe presentó una URL opaca del receptor propio en el parámetro \`${config.queryName}\` de \`${config.triggerUrl}\` y se comparó el recibo antes y después.\n\n`
@@ -71,14 +81,14 @@ function report(result: ReturnType<typeof evaluateSsrfCallback>, config: SsrfCal
     + `## Cómo corregirlo\n\nValidar destinos permitidos en el servidor antes del fetch; bloquear direcciones privadas, loopback, metadatos y redirects hacia destinos excluidos, y verificar DNS al conectar. Agregar una regresión con un receptor externo no autorizado.\n\n`
     + `## Límites\n\n${result.limitations.map(item => '- ' + item).join('\n')}\n`;
 }
-function save(folder: string, name: string, session: Session, config: SsrfCallback) {
+function save(folder: string, name: string, session: Session, config: SsrfCallback, lang: Lang = 'es') {
   const result = evaluateSsrfCallback(session, config);
   writeFileSync(join(folder, name + '.json'), JSON.stringify({ result, sha256: digest(result) }, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
-  writeFileSync(join(folder, name + '.md'), report(result, config), { flag: 'wx', mode: 0o600 });
+  writeFileSync(join(folder, name + '.md'), report(result, config, lang), { flag: 'wx', mode: 0o600 });
   return result;
 }
 export async function ssrfCallbackCheck(folder: string, scope: Scope, config: SsrfCallback,
-  options: { signal?: AbortSignal; budget?: ProgramBudget } = {}) {
+  options: { signal?: AbortSignal; budget?: ProgramBudget; lang?: Lang } = {}) {
   validateSsrfCallback(config, scope);
   mkdirSync(dirname(folder), { recursive: true }); mkdirSync(folder);
   writeFileSync(join(folder, 'scope.json'), JSON.stringify(scope, null, 2), { flag: 'wx', mode: 0o600 });
@@ -86,10 +96,10 @@ export async function ssrfCallbackCheck(folder: string, scope: Scope, config: Ss
   createSession(join(folder, 'run'), scope, plan(config));
   const session = await executeSession(join(folder, 'run'), scope, { ...options, credentials: input(config),
     stopWhen: state => evaluateSsrfCallback(state, config).status === 'confirmed' });
-  return save(folder, 'ssrf-callback', session, config);
+  return save(folder, 'ssrf-callback', session, config, options.lang);
 }
 export async function resumeSsrfCallbackCheck(folder: string, scope: Scope, config: SsrfCallback,
-  options: { signal?: AbortSignal; budget?: ProgramBudget } = {}) {
+  options: { signal?: AbortSignal; budget?: ProgramBudget; lang?: Lang } = {}) {
   validateSsrfCallback(config, scope);
   if (digest(readJson(join(folder, 'scope.json'))) !== digest(scope)
     || digest(readJson(join(folder, 'config.json'))) !== digest(config)) throw new Error('Callback definition changed');
@@ -97,5 +107,5 @@ export async function resumeSsrfCallbackCheck(folder: string, scope: Scope, conf
     throw new Error('Resumed callback result already exists');
   const session = await executeSession(join(folder, 'run'), scope, { ...options, credentials: input(config),
     stopWhen: state => evaluateSsrfCallback(state, config).status === 'confirmed' });
-  return save(folder, 'ssrf-resumed', session, config);
+  return save(folder, 'ssrf-resumed', session, config, options.lang);
 }

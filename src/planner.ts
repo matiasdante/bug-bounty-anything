@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { fields, optionalFields, assertAuthorized, strictUrl, validatePlan, validateScope } from './scope.ts';
+import { fields, optionalFields, assertAuthorized, matchesPathPrefix, queryParamNameRegex, strictUrl, validatePlan, validateScope } from './scope.ts';
 import type { Plan, Scope, Step, RequestSpec } from './scope.ts';
 import { validateProjections } from './observations.ts';
 import type { Projection } from './observations.ts';
@@ -12,6 +12,7 @@ import type { Session } from './session.ts';
 import { executeSession } from './execution.ts';
 import { digest } from './contracts.ts';
 import type { ProgramBudget } from './budget.ts';
+import type { Lang } from './i18n.ts';
 
 export type Profile = { schemaVersion: 1; accounts: [string, string]; identity: { url: string; fact: string; observe: Projection[] };
   rules: { class: SemanticClass; origin: string; pathPrefix: string; protectedPointer: string; subjectPointer: string | null; query: NonNullable<RequestSpec['query']>; policy: Policy }[];
@@ -47,7 +48,7 @@ export function compileInvestigation(scope: Scope, bundle: unknown, input: unkno
     const queryNames = new Set<string>();
     for (const q of r.query) {
       fields(q, ['name', 'valueEnv']);
-      if (typeof q.name !== 'string' || !/^[A-Za-z0-9_.-]{1,64}$/.test(q.name) || queryNames.has(q.name)
+      if (typeof q.name !== 'string' || q.name.length > 64 || !queryParamNameRegex.test(q.name) || queryNames.has(q.name)
         || typeof q.valueEnv !== 'string' || !/^BBA_INPUT_[A-Z0-9_]{1,50}$/.test(q.valueEnv)) throw new Error('Invalid profile query binding');
       queryNames.add(q.name);
     }
@@ -68,7 +69,7 @@ export function compileInvestigation(scope: Scope, bundle: unknown, input: unkno
     if (url === profile.identity.url) { record(null, 'Identity endpoint used for controls; its other classes remain untested.'); continue; }
     if (e.method !== 'GET') { record(null, 'Semantic generators currently cover read-only GET.'); continue; }
     const location = strictUrl(url);
-    const matching = profile.rules.filter(r => r.origin === location.origin && (location.pathname === r.pathPrefix || location.pathname.startsWith(r.pathPrefix.endsWith('/') ? r.pathPrefix : r.pathPrefix + '/')));
+    const matching = profile.rules.filter(r => r.origin === location.origin && matchesPathPrefix(r.pathPrefix, location.pathname));
     if (!matching.length) { record(null, 'No declared business-boundary rule applies.'); continue; }
     for (const rule of matching) {
       const key = digest({ url, rule }), id = 'h-' + key.slice(0, 24);
@@ -96,7 +97,8 @@ export function compileInvestigation(scope: Scope, bundle: unknown, input: unkno
     limitations: ['Offline planning does not verify policy truth or execute recorded URLs.', 'Template bindings must refer to controlled test resources.', 'Coverage records planning, not successful testing. Non-selected classes remain unresolved.'] };
 }
 
-export async function resumeInvestigation(folder: string, scope: Scope, output: string, options: { credentials?: Record<string, string | undefined>; signal?: AbortSignal; budget?: ProgramBudget } = {}) {
+export async function resumeInvestigation(folder: string, scope: Scope, output: string, options: { credentials?: Record<string, string | undefined>; signal?: AbortSignal; budget?: ProgramBudget; lang?: Lang } = {}) {
+  const lang = options.lang ?? 'es';
   validateScope(scope);
   const envelope = readJson(join(folder, 'coverage.json')); fields(envelope, ['coverage', 'sha256']);
   const checks = readJson(join(folder, 'checks.json'));
@@ -109,7 +111,7 @@ export async function resumeInvestigation(folder: string, scope: Scope, output: 
   const session = before.status === 'stopped' && before.stopReason === 'proof-complete' ? before
     : await executeSession(join(folder, 'run'), scope, { ...options, stopWhen });
   const result = evaluateSemantic(session, checks);
-  writeFileSync(output, output.endsWith('.md') ? semanticMarkdown(result) : JSON.stringify({ result, sha256: digest(result) }, null, 2), { flag: 'wx', mode: 0o600 });
+  writeFileSync(output, output.endsWith('.md') ? semanticMarkdown(result, lang) : JSON.stringify({ result, sha256: digest(result) }, null, 2), { flag: 'wx', mode: 0o600 });
   return { requests: session.attempts.length, newRequests: session.attempts.length - before.attempts.length, stopped: session.stopReason, findings: result.findings };
 }
 
@@ -123,16 +125,23 @@ export function prepareCompiled(folder: string, scope: Scope, bundle: unknown, p
   return compiled;
 }
 
-export async function investigateSurface(folder: string, scope: Scope, bundle: unknown, profile: unknown, options: { credentials?: Record<string, string | undefined>; signal?: AbortSignal; budget?: ProgramBudget } = {}) {
+export async function investigateSurface(folder: string, scope: Scope, bundle: unknown, profile: unknown, options: { credentials?: Record<string, string | undefined>; signal?: AbortSignal; budget?: ProgramBudget; lang?: Lang } = {}) {
+  const lang = options.lang ?? 'es';
   const compiled = prepareCompiled(folder, scope, bundle, profile);
   if (!compiled.plan) {
-    writeFileSync(join(folder, 'report.md'), '# BBA — sin hipótesis ejecutables\n\nNo se enviaron solicitudes. Consultá coverage.json para las brechas de alcance, configuración y presupuesto. No hay conclusión sobre seguridad.\n', { flag: 'wx' });
+    const emptyMd = lang === 'en'
+      ? '# BBA — no executable hypotheses\n\nNo requests were sent. See coverage.json for scope, configuration, and budget gaps. No safety conclusion is drawn.\n'
+      : '# BBA — sin hipótesis ejecutables\n\nNo se enviaron solicitudes. Consultá coverage.json para las brechas de alcance, configuración y presupuesto. No hay conclusión sobre seguridad.\n';
+    writeFileSync(join(folder, 'report.md'), emptyMd, { flag: 'wx' });
     return { requests: 0, stopped: 'no-testable-hypotheses', findings: [] };
   }
   createSession(join(folder, 'run'), scope, compiled.plan);
   const session = await executeSession(join(folder, 'run'), scope, { ...options, stopWhen: s => evaluateSemantic(s, compiled.checks).findings.some(f => f.status === 'confirmed') });
   const result = evaluateSemantic(session, compiled.checks);
   writeFileSync(join(folder, 'semantic.json'), JSON.stringify({ result, sha256: digest(result) }, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
-  writeFileSync(join(folder, 'report.md'), semanticMarkdown(result) + '\n\nConsultá coverage.json: las hipótesis sin evidencia completa y las clases no seleccionadas siguen pendientes.\n', { flag: 'wx', mode: 0o600 });
+  const tail = lang === 'en'
+    ? '\n\nSee coverage.json: hypotheses without complete evidence and unselected classes remain pending.\n'
+    : '\n\nConsultá coverage.json: las hipótesis sin evidencia completa y las clases no seleccionadas siguen pendientes.\n';
+  writeFileSync(join(folder, 'report.md'), semanticMarkdown(result, lang) + tail, { flag: 'wx', mode: 0o600 });
   return { requests: session.attempts.length, stopped: session.stopReason, findings: result.findings };
 }

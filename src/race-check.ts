@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { closeSync, fsyncSync, mkdirSync, openSync, writeFileSync, writeSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { scopedRequest, credentialFor } from './http.ts';
 import { digest } from './contracts.ts';
@@ -9,6 +9,8 @@ import { projectJson } from './observations.ts';
 import { validateHeaderEnvironment } from './headers.ts';
 import type { ProgramBudget } from './budget.ts';
 import { sealArtifact } from './artifacts.ts';
+import { openAppendJournal } from './journal.ts';
+import type { Lang } from './i18n.ts';
 
 export type RaceCheck = { schemaVersion: 1; class: 'single-use-race'; policyReference: string;
   credentialEnv: string; actionUrl: string; actionField: string;
@@ -39,7 +41,8 @@ export function validateRaceCheck(value: unknown, scope: Scope): asserts value i
     throw new Error('Race proof requires an explicit zero interval and seven request reservations');
 }
 export async function raceCheck(folder: string, scope: Scope, config: RaceCheck,
-  options: { signal?: AbortSignal; budget?: ProgramBudget; credentials?: Record<string, string | undefined> } = {}) {
+  options: { signal?: AbortSignal; budget?: ProgramBudget; credentials?: Record<string, string | undefined>; lang?: Lang } = {}) {
+  const lang = options.lang ?? 'es';
   validateRaceCheck(config, scope);
   if (scope.budgetId && !options.budget) throw new Error('Shared program budget runtime is required');
   const env: Record<string, string | undefined> = { ...process.env, ...options.credentials,
@@ -51,8 +54,8 @@ export async function raceCheck(folder: string, scope: Scope, config: RaceCheck,
   mkdirSync(dirname(folder), { recursive: true }); mkdirSync(folder);
   writeFileSync(join(folder, 'scope.json'), JSON.stringify(scope, null, 2), { flag: 'wx', mode: 0o600 });
   writeFileSync(join(folder, 'config.json'), JSON.stringify(config, null, 2), { flag: 'wx', mode: 0o600 });
-  const fd = openSync(join(folder, 'requests.jsonl'), 'wx', 0o600);
-  const append = (event: unknown) => { writeSync(fd, JSON.stringify(event) + '\n'); fsyncSync(fd); };
+  const journal = openAppendJournal(folder);
+  const append = (event: Record<string, unknown>) => journal.append(event);
   const id = randomUUID(), started = Date.now(), deadline = started + scope.limits.maxDurationMs;
   let used = 0, stopped: string | null = null;
   const replies = new Map<string, Reply>();
@@ -99,7 +102,7 @@ export async function raceCheck(folder: string, scope: Scope, config: RaceCheck,
     if (outcomes.some(outcome => outcome.status === 'rejected')) throw new Error('concurrent-request-failed');
     await send('race-after', config.raceStateUrl, 'GET');
   } catch (error) { stopped = options.signal?.aborted ? 'cancelled' : error instanceof Error ? error.message : 'execution-failed'; }
-  finally { append({ event: 'finish', requests: used, stopped }); closeSync(fd); }
+  finally { append({ event: 'finish', requests: used, stopped }); journal.close(); }
   const a = replies.get('race-a'), b = replies.get('race-b');
   const overlap = !!a && !!b && a.startedAt < b.endedAt && b.startedAt < a.endedAt;
   const status = stopped ? 'unresolved' : accepted('race-a') && accepted('race-b') && count('race-after', 2) && overlap ? 'confirmed'
@@ -111,13 +114,22 @@ export async function raceCheck(folder: string, scope: Scope, config: RaceCheck,
       'A server-side single-use invariant and cleanup of both owned resources are operator preconditions.',
       'The observed double effect does not establish broader financial impact or reliability under other concurrency levels.'] };
   writeFileSync(join(folder, 'race-check.json'), JSON.stringify({ result, sha256: digest(result) }, null, 2), { flag: 'wx', mode: 0o600 });
-  writeFileSync(join(folder, 'report.md'), `# BBA — single-use-race: ${status}\n\nBorrador no enviado.\n\n`
-    + `## Qué es\n\nPosible violación de la regla de uso único ${config.policyReference}.\n\n`
-    + `## Cómo se encontró\n\nDos recursos descartables propios: el control secuencial rechazó la segunda acción; se enviaron exactamente dos acciones concurrentes al segundo recurso.\n\n`
-    + `## Demostración de explotabilidad\n\nEstado: **${status}**. Solapamiento medido: ${overlap}. Estado final de doble efecto: ${count('race-after', 2)}. Evidencia: ${result.evidence.map(e => '`' + e + '`').join(', ')}.\n\n`
-    + `## Cómo reproducirlo\n\nUsar solo los dos recursos propios declarados, comprobar contadores iniciales en cero, ejecutar el control secuencial y, si rechaza el segundo uso, enviar las dos acciones simultáneas; comparar el contador final. No repetir una acción interrumpida.\n\n`
-    + `## Cómo corregirlo\n\nAplicar la transición de uso único de forma atómica en el servidor, con restricción de unicidad o actualización condicional dentro de una transacción. Agregar regresión con dos solicitudes concurrentes.\n\n`
-    + `## Límites\n\n${result.limitations.map(x => '- ' + x).join('\n')}\n`, { flag: 'wx', mode: 0o600 });
+  const md = lang === 'en'
+    ? `# BBA — single-use-race: ${status}\n\nLocal draft; not submitted.\n\n`
+      + `## What it is\n\nPotential violation of single-use rule ${config.policyReference}.\n\n`
+      + `## How it was found\n\nTwo disposable owned resources: sequential control rejected the second action; two concurrent actions were sent to the second resource.\n\n`
+      + `## Exploitability proof\n\nStatus: **${status}**. Measured overlap: ${overlap}. Double-effect final state: ${count('race-after', 2)}. Evidence: ${result.evidence.map(e => '`' + e + '`').join(', ')}.\n\n`
+      + `## Reproduction\n\nUse only the two declared owned resources, verify initial zero counters, run the sequential control and, if the second use is denied, send two concurrent actions; compare final counter. Never replay an interrupted action.\n\n`
+      + `## Remediation\n\nEnforce the single-use transition atomically on the server using a uniqueness constraint or conditional transactional update.\n\n`
+      + `## Limitations\n\n${result.limitations.map(x => '- ' + x).join('\n')}\n`
+    : `# BBA — single-use-race: ${status}\n\nBorrador no enviado.\n\n`
+      + `## Qué es\n\nPosible violación de la regla de uso único ${config.policyReference}.\n\n`
+      + `## Cómo se encontró\n\nDos recursos descartables propios: el control secuencial rechazó la segunda acción; se enviaron exactamente dos acciones concurrentes al segundo recurso.\n\n`
+      + `## Demostración de explotabilidad\n\nEstado: **${status}**. Solapamiento medido: ${overlap}. Estado final de doble efecto: ${count('race-after', 2)}. Evidencia: ${result.evidence.map(e => '`' + e + '`').join(', ')}.\n\n`
+      + `## Cómo reproducirlo\n\nUsar solo los dos recursos propios declarados, comprobar contadores iniciales en cero, ejecutar el control secuencial y, si rechaza el segundo uso, enviar las dos acciones simultáneas; comparar el contador final. No repetir una acción interrumpida.\n\n`
+      + `## Cómo corregirlo\n\nAplicar la transición de uso único de forma atómica en el servidor, con restricción de unicidad o actualización condicional dentro de una transacción. Agregar regresión con dos solicitudes concurrentes.\n\n`
+      + `## Límites\n\n${result.limitations.map(x => '- ' + x).join('\n')}\n`;
+  writeFileSync(join(folder, 'report.md'), md, { flag: 'wx', mode: 0o600 });
   sealArtifact(folder, { kind: 'race-check', id, scopeDigest: digest(scope), configDigest: digest(config) });
   return result;
 }

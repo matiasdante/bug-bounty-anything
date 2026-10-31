@@ -10,6 +10,7 @@ import { validateProjections } from './observations.ts';
 import { createSession, inspectSession, readJson, validateSession } from './session.ts';
 import type { Session } from './session.ts';
 import type { ProgramBudget } from './budget.ts';
+import type { Lang } from './i18n.ts';
 
 export type JwtClaimValueType = 'auto' | 'string' | 'number' | 'boolean' | 'json';
 export type JwtIntegrityConfig = { schemaVersion: 1; policyReference: string; boundary: 'jwt-signature-integrity';
@@ -152,7 +153,19 @@ export function evaluateJwtIntegrity(session: Session, config: JwtIntegrityConfi
   return result;
 }
 
-export function jwtMarkdown(result: JwtIntegrityResult, config: JwtIntegrityConfig): string {
+export function jwtMarkdown(result: JwtIntegrityResult, config: JwtIntegrityConfig, lang: Lang = 'es'): string {
+  if (lang === 'en') {
+    return `# BBA — JWT integrity (${result.status})\n\n` +
+      `Asset: \`${config.url}\`. Policy: ${config.policyReference}. Local draft for review; not submitted.\n\n` +
+      `## Hypothesis and outcome\n\nA signed JWT from an owned account must be rejected when its payload changes without re-signing. ${result.reason}\n\n` +
+      `## Bounded reproduction\n\n1. Prepare an owned account, a valid signed JWT, and a benign request whose response exposes \`${config.proofPointer}\`.\n` +
+      `2. Send the same request anonymously, with the valid JWT, with the mutated JWT retaining its signature, and again with the valid JWT.\n` +
+      `3. Compare status codes and fact digests. Retain SQLite checkpoints and evidence IDs: ${result.evidence.map(id => '\`' + id + '\`').join(', ')}.\n\n` +
+      `## Impact, severity and remediation\n\n` + (result.status === 'confirmed'
+        ? 'The route accepted a JWT with mutated payload and invalid signature for the controlled account. Verify cryptographic signature and expected algorithm before trusting any claim.\n\n'
+        : 'Impact across other identities and routes is not demonstrated.\n\n') +
+      `## Limitations\n\n${result.limitation.map(line => '- ' + line).join('\n')}\n`;
+  }
   return `# BBA — integridad JWT (${result.status})\n\n` +
     `Activo: \`${config.url}\`. Política: ${config.policyReference}. Borrador para revisión; no enviado.\n\n` +
     `## Hipótesis y resultado\n\nUn JWT firmado de una cuenta propia debe rechazarse si cambia su payload sin volver a firmarlo. ${result.reason}\n\n` +
@@ -171,8 +184,9 @@ function tokenBinding(token: string, salt: string): string {
 }
 
 export async function jwtIntegrityCheck(folder: string, scope: Scope, config: JwtIntegrityConfig, options: {
-  signal?: AbortSignal; budget?: ProgramBudget; environment?: Record<string, string | undefined>; resume?: boolean;
+  signal?: AbortSignal; budget?: ProgramBudget; environment?: Record<string, string | undefined>; resume?: boolean; lang?: Lang;
 } = {}): Promise<JwtIntegrityResult> {
+  const lang = options.lang ?? 'es';
   validateJwtIntegrity(config, scope);
   const env = options.environment ?? process.env, token = env[config.credentialEnv];
   if (!token) throw new Error('Missing controlled JWT environment variable');
@@ -204,7 +218,7 @@ export async function jwtIntegrityCheck(folder: string, scope: Scope, config: Jw
       fields(saved, ['result', 'sha256']);
       if (saved.sha256 !== digest(result) || canonical(saved.result) !== canonical(result)) throw new Error('JWT result integrity mismatch');
     } else writeFileSync(resultPath, JSON.stringify({ result, sha256: digest(result) }, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
-    const reportPath = join(folder, 'report.md'), report = jwtMarkdown(result, config);
+    const reportPath = join(folder, 'report.md'), report = jwtMarkdown(result, config, lang);
     if (existsSync(reportPath)) {
       if (readFileSync(reportPath, 'utf8') !== report) throw new Error('JWT report integrity mismatch');
     } else writeFileSync(reportPath, report, { flag: 'wx', mode: 0o600 });
@@ -212,11 +226,11 @@ export async function jwtIntegrityCheck(folder: string, scope: Scope, config: Jw
   return result;
 }
 
-export function evaluateJwtIntegrityFile(folder: string, configPath: string, output: string): JwtIntegrityResult {
+export function evaluateJwtIntegrityFile(folder: string, configPath: string, output: string, lang: Lang = 'es'): JwtIntegrityResult {
   const session = inspectSession(folder), config = readJson(configPath);
   validateJwtIntegrity(config, session.scope, false);
   const result = evaluateJwtIntegrity(session, config);
-  writeFileSync(output, output.endsWith('.md') ? jwtMarkdown(result, config)
+  writeFileSync(output, output.endsWith('.md') ? jwtMarkdown(result, config, lang)
     : JSON.stringify({ result, sha256: digest(result) }, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
   return result;
 }

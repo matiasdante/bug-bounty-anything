@@ -5,12 +5,13 @@
   "type": "module",
   "description": "Local, evidence-backed vulnerability investigation lab",
   "engines": {
-    "node": ">=26.0.0"
+    "node": ">=22.13.0"
   },
   "scripts": {
     "bba": "node src/cli.ts",
     "demo:core": "node src/demo-core.ts",
     "build": "node scripts/build.ts",
+    "package:skill": "node scripts/package-skill.ts",
     "check": "tsc --project tsconfig.json",
     "verify": "npm run check && npm run build && npm test",
     "prepack": "npm run build",

@@ -5,6 +5,7 @@ import type { Step } from './scope.ts';
 import { inspectSession, readJson, validateSession } from './session.ts';
 import type { Session } from './session.ts';
 import type { Fact } from './observations.ts';
+import type { Lang } from './i18n.ts';
 
 export const semanticClasses = ['bola', 'bfla', 'property-exposure', 'tenant-isolation'] as const;
 export type SemanticClass = typeof semanticClasses[number];
@@ -126,7 +127,19 @@ export function evaluateSemantic(session: Session, value: unknown): SemanticResu
       'Identity controls describe the observed requests; sessions and application state must remain consistent between requests.'] };
 }
 
-export function semanticMarkdown(r: SemanticResult): string {
+export function semanticMarkdown(r: SemanticResult, lang: Lang = 'es'): string {
+  if (lang === 'en') {
+    return '# BBA — semantic checks\n\nSession: `' + r.sessionId + '`. Local draft for review; not submitted.\n\n'
+      + r.findings.map(f => `## ${f.id}: ${f.class} — ${f.status}\n\n`
+        + `### What it is\n\nAccess comparison on \`${f.url}\` under declared rule ${f.policy.reference} (${f.policy.boundary}). `
+        + (f.status === 'confirmed' ? 'Protected field exposure to the restricted identity was observed on this controlled resource.'
+          : 'Evidence from this comparison does not confirm exploitation.') + '\n\n'
+        + `### How it was found\n\nImported surface and profile rule generated the anonymous control, authorized baseline, and restricted probe. See \`coverage.json\` for route provenance and untested checks.\n\n`
+        + `### Exploitability proof\n\nStatus: **${f.status}**. ${f.reason} Verifiable evidence: ${f.evidence.map(id => '`' + id + '`').join(', ')}.\n\n`
+        + `### Reproduction\n\n1. Confirm authorization, scope, and test accounts.\n2. Execute the retained plan with anonymous control, owner identity, and restricted identity against the same resource.\n3. Compare the protected field and declared identity/role/tenant facts in \`checks.json\`; never replay uncertain reservations.\n\n`
+        + `### Remediation\n\nEnforce resource, role, tenant, or property authorization before serializing protected fields.\n`).join('\n')
+      + '\n## Limitations\n\n' + r.limitations.map(l => '- ' + l).join('\n') + '\n';
+  }
   return '# BBA — comprobaciones semánticas\n\nSesión: `' + r.sessionId + '`. Borrador para revisión; no enviado.\n\n'
     + r.findings.map(f => `## ${f.id}: ${f.class} — ${f.status}\n\n`
       + `### Qué es\n\nComparación de acceso al recurso \`${f.url}\` bajo la regla declarada ${f.policy.reference} (${f.policy.boundary}). `
@@ -141,8 +154,8 @@ export function semanticMarkdown(r: SemanticResult): string {
     + '\n## Límites\n\n' + r.limitations.map(l => '- ' + l).join('\n') + '\n';
 }
 
-export function evaluateSemanticFile(folder: string, checksPath: string, output: string): SemanticResult {
+export function evaluateSemanticFile(folder: string, checksPath: string, output: string, lang: Lang = 'es'): SemanticResult {
   const result = evaluateSemantic(inspectSession(folder), readJson(checksPath));
-  writeFileSync(output, output.endsWith('.md') ? semanticMarkdown(result) : JSON.stringify({ result, sha256: digest(result) }, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
+  writeFileSync(output, output.endsWith('.md') ? semanticMarkdown(result, lang) : JSON.stringify({ result, sha256: digest(result) }, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
   return result;
 }

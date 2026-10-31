@@ -3,6 +3,8 @@ import { digest } from './contracts.ts';
 import { fields, requestSpec } from './scope.ts';
 import { inspectSession, readJson } from './session.ts';
 import type { Session } from './session.ts';
+import type { Lang } from './i18n.ts';
+import pkg from '../package.json' with { type: 'json' };
 
 export const checkClasses = ['bola', 'bfla', 'property-exposure'] as const;
 type CheckClass = typeof checkClasses[number];
@@ -14,7 +16,7 @@ export type Finding = {
   observation: string; steps: { control: Ref; baseline: Ref; probe: Ref }; limitation: string;
 };
 export type Evaluation = {
-  schemaVersion: 1; toolVersion: '0.6.0'; sessionId: string; scopeDigest: string; checksDigest: string;
+  schemaVersion: 1; toolVersion: '0.6.0'; producerVersion?: string; sessionId: string; scopeDigest: string; checksDigest: string;
   sessionStatus: Session['status']; findings: Finding[];
 };
 
@@ -76,12 +78,27 @@ export function evaluateChecks(session: Session, value: unknown): Evaluation {
     }
     return { checkId: check.id, class: check.class, status, observation, steps: { control, baseline, probe }, limitation: limitations[check.class] };
   });
-  return { schemaVersion: 1, toolVersion: '0.6.0', sessionId: session.id, scopeDigest: session.scopeDigest,
+  return { schemaVersion: 1, toolVersion: '0.6.0', producerVersion: pkg.version, sessionId: session.id, scopeDigest: session.scopeDigest,
     checksDigest: digest(value), sessionStatus: session.status, findings };
 }
 
-export function evaluationMarkdown(e: Evaluation): string {
+export function evaluationMarkdown(e: Evaluation, lang: Lang = 'es'): string {
   const rows = e.findings.map(f => `| ${f.checkId} | ${f.class} | **${f.status}** | ${f.steps.control.status ?? '-'} / ${f.steps.baseline.status ?? '-'} / ${f.steps.probe.status ?? '-'} | ${f.observation} |`);
+  if (lang === 'en') {
+    return `# Hypothesis evaluation
+
+Session \`${e.sessionId}\` (${e.sessionStatus}) · scope \`${e.scopeDigest.slice(0, 12)}\` · checks \`${e.checksDigest.slice(0, 12)}\`
+
+| Check | Class | Status | Control / baseline / probe (HTTP) | Observation |
+|---|---|---|---|---|
+${rows.join('\n')}
+
+## Limitations
+
+${[...new Set(e.findings.map(f => f.limitation))].map(l => '- ' + l).join('\n')}
+- \`needs-validation\` indicates matching response hashes without verified ownership/roles; it does not confirm a vulnerability.
+`;
+  }
   return `# Evaluación de hipótesis
 
 Sesión \`${e.sessionId}\` (${e.sessionStatus}) · scope \`${e.scopeDigest.slice(0, 12)}\` · checks \`${e.checksDigest.slice(0, 12)}\`
@@ -97,9 +114,9 @@ ${[...new Set(e.findings.map(f => f.limitation))].map(l => '- ' + l).join('\n')}
 `;
 }
 
-export function evaluateRunFile(folder: string, checksPath: string, output: string): Evaluation {
+export function evaluateRunFile(folder: string, checksPath: string, output: string, lang: Lang = 'es'): Evaluation {
   const evaluation = evaluateChecks(inspectSession(folder), readJson(checksPath));
-  const body = output.endsWith('.md') ? evaluationMarkdown(evaluation)
+  const body = output.endsWith('.md') ? evaluationMarkdown(evaluation, lang)
     : JSON.stringify({ evaluation, sha256: digest(evaluation) }, null, 2) + '\n';
   writeFileSync(output, body, { flag: 'wx', mode: 0o600 });
   return evaluation;

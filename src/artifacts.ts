@@ -1,14 +1,15 @@
-import { lstatSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { digest } from './contracts.ts';
 import { fields, integer, optionalFields } from './scope.ts';
-import { readJson } from './session.ts';
+import { inspectSession, readJson } from './session.ts';
+import { evidenceView } from './evidence.ts';
 import pkg from '../package.json' with { type: 'json' };
 
 const files = { hunt: 'hunt.json', 'browser-check': 'browser-check.json', scenario: 'scenario.json', 'race-check': 'race-check.json', 'csrf-check': 'csrf-check.json' } as const;
 type Kind = keyof typeof files;
-type Manifest = { schemaVersion: 1; producerVersion: string; kind: Kind; id: string; scopeDigest: string; configDigest: string; journalDigest: string; resultDigest: string };
+type Manifest = { schemaVersion: 1; producerVersion?: string; kind: Kind; id: string; scopeDigest: string; configDigest: string; journalDigest: string; resultDigest: string };
 function bytes(folder: string, name: string): Buffer {
   const path = join(folder, name), stat = lstatSync(path);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 4 * 1024 * 1024) throw new Error('Invalid retained artifact file');
@@ -20,15 +21,21 @@ export function sealArtifact(folder: string, input: Pick<Manifest, 'kind' | 'id'
   writeFileSync(join(folder, 'artifact.json'), JSON.stringify({ manifest, sha256: digest(manifest) }, null, 2), { flag: 'wx', mode: 0o600 });
 }
 
-export function artifactView(folder: string, input: unknown) {
+export function artifactView(folder: string, input: unknown): any {
+  if (!existsSync(join(folder, 'artifact.json')) && existsSync(join(folder, 'session.sqlite'))) {
+    const mapped = input && typeof input === 'object' && !Array.isArray(input) && (input as any).kind === 'events'
+      ? { ...(input as Record<string, unknown>), kind: 'attempts' }
+      : input;
+    return evidenceView(inspectSession(folder), mapped);
+  }
   optionalFields(input, ['kind', 'offset', 'limit'], ['eventType', 'expectedDigest']);
   if (!['summary', 'events', 'fields'].includes(input.kind)) throw new Error('Invalid artifact view');
   integer(input.offset, 0, 10000); integer(input.limit, 1, 50);
   if (input.eventType !== undefined && (typeof input.eventType !== 'string' || !/^[a-z][a-z-]{0,39}$/.test(input.eventType))) throw new Error('Invalid event filter');
   bytes(folder, 'artifact.json');
   const envelope = readJson(join(folder, 'artifact.json')); fields(envelope, ['manifest', 'sha256']);
-  const m = envelope.manifest; fields(m, ['schemaVersion', 'producerVersion', 'kind', 'id', 'scopeDigest', 'configDigest', 'journalDigest', 'resultDigest']);
-  if (m.schemaVersion !== 1 || typeof m.producerVersion !== 'string' || !/^\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(m.producerVersion) || !Object.hasOwn(files, m.kind) || !/^[a-f0-9-]{36}$/.test(m.id)
+  const m = envelope.manifest; optionalFields(m, ['schemaVersion', 'kind', 'id', 'scopeDigest', 'configDigest', 'journalDigest', 'resultDigest'], ['producerVersion']);
+  if (m.schemaVersion !== 1 || (m.producerVersion !== undefined && (typeof m.producerVersion !== 'string' || !/^\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(m.producerVersion))) || !Object.hasOwn(files, m.kind) || !/^[a-f0-9-]{36}$/.test(m.id)
     || [m.scopeDigest, m.configDigest, m.journalDigest, m.resultDigest].some(x => typeof x !== 'string' || !/^[a-f0-9]{64}$/.test(x))
     || envelope.sha256 !== digest(m)) throw new Error('Invalid artifact manifest');
   if (input.expectedDigest !== undefined && input.expectedDigest !== envelope.sha256) throw new Error('Artifact revision changed');

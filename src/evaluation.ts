@@ -12,13 +12,15 @@ import { startRoleLab } from './role-lab.ts';
 import { validatePlan, validateScope } from './scope.ts';
 import type { Plan, Scope } from './scope.ts';
 import { createSession, exportSession } from './session.ts';
+import type { Lang } from './i18n.ts';
+import pkg from '../package.json' with { type: 'json' };
 
 type Group = 'detection' | 'inconclusive' | 'scope' | 'secrets' | 'recovery';
 type Outcome = { actual: string; requests: number };
 type Case = { id: string; group: Group; expected: string; run: () => Promise<Outcome> };
 export type CaseResult = { id: string; group: Group; expected: string; actual: string; passed: boolean; requests: number; ms: number };
 export type Report = {
-  schemaVersion: 1; toolVersion: '0.9.0'; frozenDigest: string; node: string; cases: CaseResult[];
+  schemaVersion: 1; toolVersion: '0.9.0'; producerVersion?: string; frozenDigest: string; node: string; cases: CaseResult[];
   metrics: {
     cases: number; passed: number; requests: number; ms: number;
     detections: number; omissions: number; falsePositives: number; unresolvedAsExpected: number;
@@ -193,7 +195,7 @@ export async function runEvaluation(): Promise<Report> {
   const num = (text: string, pattern: RegExp) => Number(text.match(pattern)?.[1] ?? 0);
   const vulnerable = by('detection', 'vulnerable'), fixed = by('detection', 'fixed');
   return {
-    schemaVersion: 1, toolVersion: '0.9.0', frozenDigest: FROZEN_DIGEST, node: process.versions.node, cases: results,
+    schemaVersion: 1, toolVersion: '0.9.0', producerVersion: pkg.version, frozenDigest: FROZEN_DIGEST, node: process.versions.node, cases: results,
     metrics: {
       cases: results.length, passed: results.filter(r => r.passed).length,
       requests: results.reduce((n, r) => n + r.requests, 0), ms: results.reduce((n, r) => n + r.ms, 0),
@@ -212,8 +214,33 @@ export async function runEvaluation(): Promise<Report> {
   };
 }
 
-export function reportMarkdown(r: Report): string {
+export function reportMarkdown(r: Report, lang: Lang = 'es'): string {
   const m = r.metrics;
+  if (lang === 'en') {
+    return `# BBA frozen evaluation ${r.toolVersion}
+
+Node ${r.node} · set \`${r.frozenDigest.slice(0, 12)}\` · **${m.passed}/${m.cases}** expected cases
+
+| Metric | Value |
+|---|---|
+| Detections (confirmed vulnerable variants) | ${m.detections} |
+| Omissions (unconfirmed vulnerable variants) | ${m.omissions} |
+| False positives (confirmed fixed variants) | ${m.falsePositives} |
+| Expected inconclusive (budget exhausted -> unresolved) | ${m.unresolvedAsExpected} |
+| Scope violations | ${m.scopeViolations} |
+| Secret occurrences in artifacts | ${m.secretOccurrences} |
+| Repeated requests on resume | ${m.repeatedRequests} |
+| Total requests / duration | ${m.requests} / ${m.ms} ms |
+
+| Case | Expected | Actual | |
+|---|---|---|---|
+${r.cases.map(c => `| ${c.id} | ${c.expected} | ${c.actual} | ${c.passed ? 'ok' : '**FAIL**'} |`).join('\n')}
+
+## Limitations
+
+${r.limitations.map(l => '- ' + l).join('\n')}
+`;
+  }
   return `# Evaluación congelada BBA ${r.toolVersion}
 
 Node ${r.node} · conjunto \`${r.frozenDigest.slice(0, 12)}\` · **${m.passed}/${m.cases}** casos esperados
@@ -239,9 +266,9 @@ ${r.limitations.map(l => '- ' + l).join('\n')}
 `;
 }
 
-export async function evaluationFile(output: string): Promise<Report> {
+export async function evaluationFile(output: string, lang: Lang = 'es'): Promise<Report> {
   const report = await runEvaluation();
-  const body = output.endsWith('.md') ? reportMarkdown(report) : JSON.stringify({ report, sha256: digest(report) }, null, 2) + '\n';
+  const body = output.endsWith('.md') ? reportMarkdown(report, lang) : JSON.stringify({ report, sha256: digest(report) }, null, 2) + '\n';
   await writeFile(output, body, { flag: 'wx', mode: 0o600 });
   return report;
 }

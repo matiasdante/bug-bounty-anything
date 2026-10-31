@@ -1,7 +1,6 @@
-import { mkdirSync, openSync, closeSync, writeSync, fsyncSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
-import { setTimeout as delay } from 'node:timers/promises';
 import { fields, integer, requestSpec, validatePlan, validateScope } from './scope.ts';
 import type { Scope, Plan, Step } from './scope.ts';
 import { resolveRequest } from './requests.ts';
@@ -12,6 +11,7 @@ import { validateHeaderEnvironment } from './headers.ts';
 import { digest } from './contracts.ts';
 import type { ProgramBudget } from './budget.ts';
 import { sealArtifact } from './artifacts.ts';
+import { openAppendJournal, waitIntervalOrDeadline } from './journal.ts';
 
 type Action = { kind: 'navigate'; stepId: string } | { kind: 'fill'; selector: string; valueEnv: string }
   | { kind: 'click' | 'wait'; selector: string };
@@ -58,8 +58,8 @@ export async function captureScenario(folder: string, scope: Scope, config: Brow
   for (const a of config.actions) if (a.kind === 'fill' && (env[a.valueEnv] === undefined || Buffer.byteLength(env[a.valueEnv]!) > 4096)) throw new Error('Missing or oversized scenario input');
   mkdirSync(dirname(folder), { recursive: true }); mkdirSync(folder);
   for (const [name, value] of Object.entries({ scope, config })) writeFileSync(join(folder, name + '.json'), JSON.stringify(value, null, 2), { flag: 'wx', mode: 0o600 });
-  const fd = openSync(join(folder, 'requests.jsonl'), 'wx', 0o600);
-  const append = (event: unknown) => { writeSync(fd, JSON.stringify(event) + '\n'); fsyncSync(fd); };
+  const journal = openAppendJournal(folder);
+  const append = (event: Record<string, unknown>) => journal.append(event);
   const id = randomUUID(), deadline = Date.now() + scope.limits.maxDurationMs;
   let used = 0, lastEnd = 0, blocked = 0, redirects = 0, setCookieCount = 0, completedActions = 0, stopped: string | null = null, queue = Promise.resolve();
   const facts: { name: string; present: boolean; sha256: string | null; truncated: boolean }[] = [];
@@ -87,11 +87,7 @@ export async function captureScenario(folder: string, scope: Scope, config: Brow
           try {
             if (options.signal?.aborted) throw new Error('cancelled');
             if (used >= scope.limits.maxRequests) throw new Error('budget-exhausted');
-            const wait = Math.max(0, lastEnd + scope.limits.minIntervalMs - Date.now());
-            if (Date.now() + wait >= deadline) throw new Error('deadline');
-            if (wait) await delay(wait, undefined, { signal: options.signal });
-            if (options.signal?.aborted) throw new Error('cancelled');
-            if (Date.now() >= deadline) throw new Error('deadline');
+            await waitIntervalOrDeadline(lastEnd, scope.limits.minIntervalMs, deadline, options.signal);
             used++; append({ event: 'reserved', id: reference, stepId: entry.step.id, method: entry.step.method, url: entry.step.url, at: new Date().toISOString() });
             if (options.budget) { await options.budget.beforeRequest(reference, options.signal); sharedReserved = true; }
             const headers = Object.fromEntries(Object.entries(request.headers).map(([name, value]) => [name.toLowerCase(), String(value)]));
@@ -148,7 +144,7 @@ export async function captureScenario(folder: string, scope: Scope, config: Brow
     } finally { await context.close(); }
   } catch (e) { stopped ??= failure(e); }
   finally {
-    try { await queue.catch(() => {}); if (isolated) await isolated.close(); } finally { append({ event: 'finish', requests: used, stopped }); closeSync(fd); }
+    try { await queue.catch(() => {}); if (isolated) await isolated.close(); } finally { append({ event: 'finish', requests: used, stopped }); journal.close(); }
   }
   const result = { schemaVersion: 1, id, status: stopped ? 'unresolved' : 'completed', stopped, requests: used, blocked, redirects, setCookieCount, completedActions, facts,
     limitations: ['Observed controlled workflow only; no vulnerability is automatically confirmed.', 'Every request URL/method/body is predeclared. Dynamic unbound inputs, undeclared redirects and foreign writes are blocked.',

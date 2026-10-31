@@ -1,7 +1,6 @@
-import { mkdirSync, openSync, writeSync, fsyncSync, closeSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
-import { setTimeout as delay } from 'node:timers/promises';
 import { launchIsolated } from './capture.ts';
 import { credentialFor, scopedRequest } from './http.ts';
 import { fields, integer, requestSpec, validatePlan, validateScope } from './scope.ts';
@@ -12,6 +11,8 @@ import { digest } from './contracts.ts';
 import { validateHeaderEnvironment } from './headers.ts';
 import type { ProgramBudget } from './budget.ts';
 import { sealArtifact } from './artifacts.ts';
+import { openAppendJournal, waitIntervalOrDeadline } from './journal.ts';
+import type { Lang } from './i18n.ts';
 
 type Base = { schemaVersion: 1; policyReference: string; resources: Step[]; observationMs: number };
 export type BrowserCheck = Base & (
@@ -47,7 +48,8 @@ export function validateBrowserCheck(value: unknown, scope: Scope): asserts valu
 
 // Chromium evaluates SOP, CSP and cookie delivery. The relay permits only exact
 // predeclared GETs and preserves the response headers needed for those policies.
-export async function browserCheck(folder: string, scope: Scope, config: BrowserCheck, options: { credentials?: Record<string, string | undefined>; signal?: AbortSignal; budget?: ProgramBudget } = {}) {
+export async function browserCheck(folder: string, scope: Scope, config: BrowserCheck, options: { credentials?: Record<string, string | undefined>; signal?: AbortSignal; budget?: ProgramBudget; lang?: Lang } = {}) {
+  const lang = options.lang ?? 'es';
   validateScope(scope); validateBrowserCheck(config, scope);
   if (scope.budgetId && !options.budget) throw new Error('Shared program budget runtime is required');
   const env = options.credentials ?? process.env;
@@ -63,8 +65,8 @@ export async function browserCheck(folder: string, scope: Scope, config: Browser
     || resolved.get(config.baseline.id)!.url.href === resolved.get(config.probe.id)!.url.href)) throw new Error('Distinct XSS inputs and a unique opaque marker are required');
   mkdirSync(dirname(folder), { recursive: true }); mkdirSync(folder);
   for (const [name, value] of Object.entries({ scope, config })) writeFileSync(join(folder, name + '.json'), JSON.stringify(value, null, 2), { flag: 'wx', mode: 0o600 });
-  const fd = openSync(join(folder, 'requests.jsonl'), 'wx', 0o600);
-  const append = (value: unknown) => { writeSync(fd, JSON.stringify(value) + '\n'); fsyncSync(fd); };
+  const journal = openAppendJournal(folder);
+  const append = (value: Record<string, unknown>) => journal.append(value);
   const id = randomUUID(), started = Date.now(), deadline = started + scope.limits.maxDurationMs;
   let used = 0, blocked = 0, lastEnd = 0, stopped: string | null = null, queue = Promise.resolve();
   const observations: { phase: string; complete: boolean; scriptExecuted: boolean; protectedDigest: string | null }[] = [];
@@ -72,11 +74,7 @@ export async function browserCheck(folder: string, scope: Scope, config: Browser
   const send = async (step: Step, phase: string, cookie?: string, browserOrigin?: string) => {
     if (options.signal?.aborted) throw new Error('cancelled');
     if (used >= scope.limits.maxRequests) throw new Error('budget-exhausted');
-    const wait = Math.max(0, lastEnd + scope.limits.minIntervalMs - Date.now());
-    if (Date.now() + wait >= deadline) throw new Error('deadline');
-    if (wait) await delay(wait, undefined, { signal: options.signal });
-    if (options.signal?.aborted) throw new Error('cancelled');
-    if (Date.now() >= deadline) throw new Error('deadline');
+    await waitIntervalOrDeadline(lastEnd, scope.limits.minIntervalMs, deadline, options.signal);
     const requestId = ++used;
     append({ event: 'reserved', id: id + ':' + requestId, phase, stepId: step.id, url: step.url, at: new Date().toISOString() });
     const reference = id + ':' + requestId; let sharedReserved = false;
@@ -160,7 +158,7 @@ export async function browserCheck(folder: string, scope: Scope, config: Browser
     }
   } catch (e) { stopped = options.signal?.aborted ? 'cancelled' : e instanceof Error && ['cancelled', 'budget-exhausted', 'deadline', 'unsafe-response'].includes(e.message) ? e.message : 'execution-failed'; }
   finally {
-    try { await queue.catch(() => {}); if (browser) await browser.close(); } finally { append({ event: 'finish', requests: used, stopped }); closeSync(fd); }
+    try { await queue.catch(() => {}); if (browser) await browser.close(); } finally { append({ event: 'finish', requests: used, stopped }); journal.close(); }
   }
   const [baseline, probe] = observations;
   let status: 'confirmed' | 'not-reproduced' | 'unresolved' = 'unresolved';
@@ -178,7 +176,10 @@ export async function browserCheck(folder: string, scope: Scope, config: Browser
       'CORS uses declared test-cookie SameSite settings and actual browser cookie delivery; these settings must match the service. No automatic login or cookie rotation is modeled.',
       'Only metadata, marker execution and protected-value digests are retained. No resume; durable reservations survive uncertain attempts.'] };
   writeFileSync(join(folder, 'browser-check.json'), JSON.stringify({ result, sha256: digest(result) }, null, 2), { flag: 'wx', mode: 0o600 });
-  writeFileSync(join(folder, 'report.md'), `# BBA — ${config.class}: ${status}\n\nRegla: ${config.policyReference}. Requests: ${used}. Detención: ${stopped ?? 'ninguna'}. Borrador no enviado.\n\nLa configuración declarada y requests.jsonl identifican baseline y sonda. El resultado conserva la ejecución del marcador o la comparación de la propiedad protegida en Chromium; no conserva su valor.\n\n` + result.limitations.map(l => '- ' + l).join('\n'), { flag: 'wx', mode: 0o600 });
+  const md = lang === 'en'
+    ? `# BBA — ${config.class}: ${status}\n\nRule: ${config.policyReference}. Requests: ${used}. Stopped: ${stopped ?? 'none'}. Local draft; not submitted.\n\nDeclared configuration and requests.jsonl identify baseline and probe. Result retains marker execution or Chromium protected-property comparison without storing raw values.\n\n` + result.limitations.map(l => '- ' + l).join('\n')
+    : `# BBA — ${config.class}: ${status}\n\nRegla: ${config.policyReference}. Requests: ${used}. Detención: ${stopped ?? 'ninguna'}. Borrador no enviado.\n\nLa configuración declarada y requests.jsonl identifican baseline y sonda. El resultado conserva la ejecución del marcador o la comparación de la propiedad protegida en Chromium; no conserva su valor.\n\n` + result.limitations.map(l => '- ' + l).join('\n');
+  writeFileSync(join(folder, 'report.md'), md, { flag: 'wx', mode: 0o600 });
   sealArtifact(folder, { kind: 'browser-check', id, scopeDigest: digest(scope), configDigest: digest(config) });
   return result;
 }

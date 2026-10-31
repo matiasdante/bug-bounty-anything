@@ -10,12 +10,13 @@ import { scopedRequest, RequestFailure, credentialFor } from './http.ts';
 import { assertAuthorized, fields, validatePlan, validateScope } from './scope.ts';
 import type { Plan, Scope } from './scope.ts';
 import { requireNewDirectory } from './storage.ts';
-import { importSurface } from './surface.ts';
+import { projectCapturedHar } from './surface.ts';
 import type { Surface } from './surface.ts';
 import { validateHeaderEnvironment } from './headers.ts';
 import type { ProgramBudget } from './budget.ts';
 import { randomUUID } from 'node:crypto';
 import { readJson } from './session.ts';
+import pkg from '../package.json' with { type: 'json' };
 
 type PageLink = { path: string; inScope: boolean };
 type PageForm = { action: string; method: string; inScope: boolean; fields: string[] };
@@ -38,7 +39,7 @@ function pagePath(raw: string, base: string, scope: Scope): PageLink | null {
 
 type Outcome = 'sent' | 'blocked' | 'not-sent' | 'failed';
 export type Capture = {
-  schemaVersion: 1; toolVersion: '0.5.0'; scopeDigest: string; planDigest: string;
+  schemaVersion: 1; toolVersion: '0.5.0'; producerVersion?: string; scopeDigest: string; planDigest: string;
   startedAt: string; endedAt: string; stopReason: string | null;
   counts: Record<Outcome | 'unrepresentable' | 'websocket-blocked' | 'leak-attempts', number>;
   // Aligned with surface.entries; requests whose URL cannot be projected are only counted.
@@ -78,8 +79,6 @@ export async function launchIsolated() {
   sink.close();
   throw new Error('Browser unavailable; run npx playwright-core install --only-shell chromium');
 }
-
-const har = (entries: unknown[]) => ({ log: { version: '1.2', entries } });
 
 export async function captureSurface(folder: string, scope: Scope, plan: Plan, options: {
   signal?: AbortSignal; credentials?: Record<string, string | undefined>;
@@ -213,19 +212,16 @@ export async function captureSurface(folder: string, scope: Scope, plan: Plan, o
   } finally { await isolated.close(); }
   await queue;
 
-  const projectable = entries.filter(e => {
-    try { importSurface(har([harRecord(e)]), 'har'); return true; } catch { return false; }
-  });
-  const surface = importSurface(har(projectable.map(harRecord)), 'har');
+  const { surface, keptIndices, unrepresentable } = projectCapturedHar(entries.map(harRecord));
   surface.limitations.push('Browser capture: status null means the request was blocked or not sent by BBA; see capture.json outcomes.',
     'Only GET to exact in-scope paths was sent, with the plan credential (Bearer or Cookie). Browser cookies and headers were not forwarded; Set-Cookie from responses is not applied, so a rotating session can end unauthenticated.');
   const count = (outcome: Outcome) => entries.filter(e => e.outcome === outcome).length;
   const capture: Capture = {
-    schemaVersion: 1, toolVersion: '0.5.0', scopeDigest: digest(scope), planDigest: digest(plan),
+    schemaVersion: 1, toolVersion: '0.5.0', producerVersion: pkg.version, scopeDigest: digest(scope), planDigest: digest(plan),
     startedAt, endedAt: new Date().toISOString(), stopReason,
     counts: { sent: count('sent'), blocked: count('blocked'), 'not-sent': count('not-sent'), failed: count('failed'),
-      unrepresentable: entries.length - projectable.length, 'websocket-blocked': websockets, 'leak-attempts': isolated.leaks() },
-    outcomes: projectable.map(e => e.outcome),
+      unrepresentable, 'websocket-blocked': websockets, 'leak-attempts': isolated.leaks() },
+    outcomes: keptIndices.map(idx => entries[idx].outcome),
   };
   mkdirSync(dirname(out), { recursive: true });
   mkdirSync(out); // Throws if another process created it meanwhile.

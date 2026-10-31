@@ -9,6 +9,7 @@ import { validateSurfaceBundle } from './surface.ts';
 import type { ProgramBudget } from './budget.ts';
 import type { Surface } from './surface.ts';
 import { inspectSession, readJson } from './session.ts';
+import type { Lang } from './i18n.ts';
 
 type Asset = { origin: string; pathPrefixes: string[] };
 export type StudyPolicy = { schemaVersion: 1; mode: Scope['mode']; sourceUrl: string; reviewedAt: string;
@@ -168,10 +169,34 @@ export function compileStudy(value: unknown): StudyCompilation {
     graph: { nodes, edges } };
 }
 
-function report(bundle: StudyBundle, compiled: StudyCompilation, result: JwtIntegrityResult | null): string {
+function report(bundle: StudyBundle, compiled: StudyCompilation, result: JwtIntegrityResult | null, lang: Lang = 'es'): string {
   const selected = compiled.candidates.find(c => c.id === compiled.selected);
-  const evidence = result?.evidence.map(id => `\`${id}\``).join(', ') ?? 'Sin solicitudes de prueba.';
   const outcome = result?.status ?? 'unresolved';
+  if (lang === 'en') {
+    const evidenceEn = result?.evidence.map(id => `\`${id}\``).join(', ') ?? 'No test requests sent.';
+    return `# BBA — study ${bundle.case.id} (${outcome})\n\n` +
+      `Local draft for review; not submitted. Published case: ${bundle.case.author}, [${bundle.case.title}](${bundle.case.sourceUrl}) (${bundle.case.published}). ` +
+      `The publication is a methodological reference and does not authorize testing against the original service.\n\n` +
+      `## What it is\n\nHypothesis: an endpoint declaring optional authentication among protected operations might accept JWTs with mutated claims and stale signatures. ` +
+      `${result?.reason ?? compiled.reason}\n\n` +
+      `## How it was found\n\nOffline imported API surface: digest \`${bundle.surface.surface.sourceDigest}\`; ` +
+      `${compiled.candidates.length} in-policy authentication exceptions. ` +
+      `Structured historical clue: ${bundle.historical.sourceUrl} (${bundle.historical.capturedAt}). ` +
+      `${selected ? `Selected candidate: \`${selected.url}\`, operation \`${selected.locator}\`.` : 'No unique candidate was selected.'}\n\n` +
+      `## Exploitability proof\n\n${result?.status === 'confirmed'
+        ? 'Anonymous control was denied and the mutated JWT retaining its previous signature received the same protected fact as the valid token before and after.'
+        : result?.status === 'not-reproduced' ? 'The declared mutation was denied while the original token remained valid.'
+          : 'Available evidence does not demonstrate an exploitable vulnerability.'} ` +
+      `Evidence: ${evidenceEn}\n\n` +
+      `## Reproduction\n\n1. Use an owned test account and the policy recorded in the case file.\n` +
+      `2. Prepare the benign body in the declared environment variable and the owned JWT in \`${bundle.profile.credentialEnv}\`.\n` +
+      `3. Execute the same request anonymously, with valid JWT, with mutated JWT retaining its signature, and again with valid JWT; compare JSON fact \`${bundle.profile.proofPointer}\`.\n` +
+      `4. Inspect plan and checkpoints under \`jwt/run\`; never replay uncertain reservations.\n\n` +
+      `## Remediation\n\nVerify cryptographic signature and permitted algorithm before trusting claims for authentication or authorization.\n\n` +
+      `## Scope and limitations\n\nDeclared policy: ${bundle.policy.sourceUrl}, reviewed ${bundle.policy.reviewedAt}; ` +
+      `reference ${bundle.policy.authorization.reference}. Raw tokens, bodies, and responses are never retained.\n`;
+  }
+  const evidence = result?.evidence.map(id => `\`${id}\``).join(', ') ?? 'Sin solicitudes de prueba.';
   return `# BBA — estudio ${bundle.case.id} (${outcome})\n\n` +
     `Borrador para revisión; no enviado. Caso publicado: ${bundle.case.author}, [${bundle.case.title}](${bundle.case.sourceUrl}) (${bundle.case.published}). ` +
     `La publicación es una referencia metodológica, no autoriza pruebas sobre el servicio original.\n\n` +
@@ -204,7 +229,7 @@ function verifySaved(path: string, value: unknown): void {
   const saved = readJson(path); fields(saved, ['value', 'sha256']);
   if (saved.sha256 !== digest(value) || canonical(saved.value) !== canonical(value)) throw new Error('Study artifact integrity mismatch');
 }
-export function prepareStudy(folder: string, bundle: StudyBundle): StudyCompilation {
+export function prepareStudy(folder: string, bundle: StudyBundle, lang: Lang = 'es'): StudyCompilation {
   const compiled = compileStudy(bundle);
   mkdirSync(dirname(folder), { recursive: true }); mkdirSync(folder);
   save(join(folder, 'bundle.json'), bundle);
@@ -212,12 +237,13 @@ export function prepareStudy(folder: string, bundle: StudyBundle): StudyCompilat
   if (compiled.scope && compiled.config) {
     save(join(folder, 'scope.json'), compiled.scope);
     save(join(folder, 'jwt-config.json'), compiled.config);
-  } else writeFileSync(join(folder, 'report.md'), report(bundle, compiled, null), { flag: 'wx', mode: 0o600 });
+  } else writeFileSync(join(folder, 'report.md'), report(bundle, compiled, null, lang), { flag: 'wx', mode: 0o600 });
   return compiled;
 }
 export async function executeStudy(folder: string, bundle: StudyBundle, options: {
-  budget?: ProgramBudget; signal?: AbortSignal; environment?: Record<string, string | undefined>; resume?: boolean;
+  budget?: ProgramBudget; signal?: AbortSignal; environment?: Record<string, string | undefined>; resume?: boolean; lang?: Lang;
 } = {}): Promise<{ analysis: StudyCompilation; result: JwtIntegrityResult | null; report: string | null }> {
+  const lang = options.lang ?? 'es';
   const compiled = compileStudy(bundle);
   if (options.resume) {
     verifySaved(join(folder, 'bundle.json'), bundle);
@@ -226,16 +252,16 @@ export async function executeStudy(folder: string, bundle: StudyBundle, options:
       verifySaved(join(folder, 'scope.json'), compiled.scope);
       verifySaved(join(folder, 'jwt-config.json'), compiled.config);
     }
-  } else prepareStudy(folder, bundle);
+  } else prepareStudy(folder, bundle, lang);
   if (!compiled.scope || !compiled.config) {
     const path = join(folder, 'report.md');
-    if (options.resume && readFileSync(path, 'utf8') !== report(bundle, compiled, null)) throw new Error('Study report integrity mismatch');
+    if (options.resume && readFileSync(path, 'utf8') !== report(bundle, compiled, null, lang)) throw new Error('Study report integrity mismatch');
     return { analysis: compiled, result: null, report: path };
   }
   const result = await jwtIntegrityCheck(join(folder, 'jwt'), compiled.scope, compiled.config,
-    { budget: options.budget, signal: options.signal, environment: options.environment, resume: options.resume });
+    { budget: options.budget, signal: options.signal, environment: options.environment, resume: options.resume, lang });
   if (inspectSession(join(folder, 'jwt', 'run')).status !== 'completed') return { analysis: compiled, result, report: null };
-  const path = join(folder, 'report.md'), body = report(bundle, compiled, result);
+  const path = join(folder, 'report.md'), body = report(bundle, compiled, result, lang);
   if (existsSync(path)) {
     if (readFileSync(path, 'utf8') !== body) throw new Error('Study report integrity mismatch');
   } else writeFileSync(path, body, { flag: 'wx', mode: 0o600 });

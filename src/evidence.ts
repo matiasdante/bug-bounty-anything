@@ -1,8 +1,10 @@
 import { integer, optionalFields, requestSpec } from './scope.ts';
-import { writeFileSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { digest } from './contracts.ts';
 import { inspectSession, validateSession } from './session.ts';
 import type { Session } from './session.ts';
+import { artifactView } from './artifacts.ts';
 
 type Query = { kind: 'summary' | 'attempts' | 'fields'; offset: number; limit: number; stepId?: string; expectedDigest?: string };
 export function evidenceView(session: Session, value: unknown) {
@@ -50,7 +52,15 @@ export function compareSessions(before: Session, after: Session) {
     limitations: ['Differences are observations, not vulnerability classifications.', 'Credential values, current server state and request input values are not available for comparison; session-salted input bindings are not cross-run identities.'] };
 }
 
-export const evidenceViewFile = (folder: string, query: unknown) => evidenceView(inspectSession(folder), query);
+export function evidenceViewFile(folder: string, query: unknown): any {
+  if (!existsSync(join(folder, 'session.sqlite')) && existsSync(join(folder, 'artifact.json'))) {
+    const mapped = query && typeof query === 'object' && !Array.isArray(query) && (query as any).kind === 'attempts'
+      ? { ...(query as Record<string, unknown>), kind: 'events' }
+      : query;
+    return artifactView(folder, mapped);
+  }
+  return evidenceView(inspectSession(folder), query);
+}
 export const compareRunFiles = (before: string, after: string) => compareSessions(inspectSession(before), inspectSession(after));
 export function exportComparison(before: string, after: string, out: string) {
   const comparison = compareRunFiles(before, after);

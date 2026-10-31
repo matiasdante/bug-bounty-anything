@@ -7,6 +7,7 @@ import { fields, optionalFields, isoDate, validateScope, validatePlan } from './
 import type { Scope, Plan, Step } from './scope.ts';
 import { validateFacts } from './observations.ts';
 import type { Fact } from './observations.ts';
+import type { Lang } from './i18n.ts';
 import pkg from '../package.json' with { type: 'json' };
 
 export type Attempt = {
@@ -193,14 +194,21 @@ export function sessionSummary(state: Session) {
   };
 }
 
-export function exportSession(folder: string, output: string, format: 'json' | 'markdown'): void {
+export function exportSession(folder: string, output: string, format: 'json' | 'markdown', lang: Lang = 'es'): void {
   const state = inspectSession(folder);
   const content = format === 'json' ? JSON.stringify({ session: state, sha256: digest(state) }, null, 2) + '\n'
-    : `# BBA — ejecución ${state.id}\n\nEstado: **${state.status}**. No se infieren vulnerabilidades a partir de estos estados HTTP.\n\n`
-      + `Presupuesto consumido: ${state.attempts.length}/${state.scope.limits.maxRequests}. Pendientes: ${state.plan.steps.length - state.attempts.length}.\n\n`
-      + 'Los intentos interrumpidos o cancelados consumen presupuesto y no se repiten al retomar. Cuerpos y credenciales no se conservan.\n\n'
-      + '| Paso | Resultado | HTTP | Motivo |\n|---|---|---|---|\n'
-      + state.attempts.map(a => `| ${a.stepId} | ${a.outcome} | ${a.response?.status ?? '-'} | ${a.reason ?? '-'} |`).join('\n')
-      + '\n\nLa evidencia conserva tamaño y hash de los bytes recibidos, sin guardar su contenido. Un hash no autentica al autor.\n';
+    : lang === 'en'
+      ? `# BBA — execution ${state.id}\n\nStatus: **${state.status}**. No vulnerabilities are inferred from HTTP status codes alone.\n\n`
+        + `Consumed budget: ${state.attempts.length}/${state.scope.limits.maxRequests}. Pending: ${state.plan.steps.length - state.attempts.length}.\n\n`
+        + 'Interrupted or cancelled attempts consume budget and are never replayed on resume. Bodies and credentials are not retained.\n\n'
+        + '| Step | Outcome | HTTP | Reason |\n|---|---|---|---|\n'
+        + state.attempts.map(a => `| ${a.stepId} | ${a.outcome} | ${a.response?.status ?? '-'} | ${a.reason ?? '-'} |`).join('\n')
+        + '\n\nEvidence retains received byte length and digest without storing raw content.\n'
+      : `# BBA — ejecución ${state.id}\n\nEstado: **${state.status}**. No se infieren vulnerabilidades a partir de estos estados HTTP.\n\n`
+        + `Presupuesto consumido: ${state.attempts.length}/${state.scope.limits.maxRequests}. Pendientes: ${state.plan.steps.length - state.attempts.length}.\n\n`
+        + 'Los intentos interrumpidos o cancelados consumen presupuesto y no se repiten al retomar. Cuerpos y credenciales no se conservan.\n\n'
+        + '| Paso | Resultado | HTTP | Motivo |\n|---|---|---|---|\n'
+        + state.attempts.map(a => `| ${a.stepId} | ${a.outcome} | ${a.response?.status ?? '-'} | ${a.reason ?? '-'} |`).join('\n')
+        + '\n\nLa evidencia conserva tamaño y hash de los bytes recibidos, sin guardar su contenido. Un hash no autentica al autor.\n';
   writeFileSync(resolve(output), content, { flag: 'wx', mode: 0o600 });
 }

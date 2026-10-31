@@ -14,7 +14,10 @@ const attempt = async (name: string, test: () => Promise<string>): Promise<Docto
 export async function doctor(): Promise<{ ok: boolean; checks: DoctorCheck[] }> {
   const checks = [
     await attempt('node', async () => {
-      if (Number(process.versions.node.split('.')[0]) < 26) throw new Error(`Node ${process.versions.node} found; 26 or later is required`);
+      const [major, minor] = process.versions.node.split('.').map(Number);
+      if (major < 22 || (major === 22 && minor < 13)) {
+        throw new Error(`Node ${process.versions.node} found; 22.13 or later is required`);
+      }
       return process.versions.node;
     }),
     await attempt('sqlite', async () => {

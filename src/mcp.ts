@@ -2,7 +2,7 @@ import { createInterface } from 'node:readline';
 import type { Readable, Writable } from 'node:stream';
 import pkg from '../package.json' with { type: 'json' };
 import { safeErrorMessage } from './contracts.ts';
-import { confine, tools } from './tools.ts';
+import { buildToolValidator, confine, tools } from './tools.ts';
 
 const versions = ['2024-11-05', '2025-03-26', '2025-06-18'];
 
@@ -10,7 +10,9 @@ const versions = ['2024-11-05', '2025-03-26', '2025-06-18'];
 // Network tools exist only with allowNetwork; credentials never travel as arguments.
 export function serveMcp(options: { root: string; allowNetwork: boolean; input: Readable; output: Writable }): Promise<void> {
   const path = confine(options.root);
-  const available = tools.filter(t => options.allowNetwork || !t.network);
+  const available = tools
+    .filter(t => options.allowNetwork || !t.network)
+    .map(tool => ({ tool, ...buildToolValidator(tool.args) }));
   const inFlight = new Map<string | number, AbortController>();
   const send = (message: unknown): void => { options.output.write(JSON.stringify(message) + '\n'); };
   const fail = (id: unknown, code: number, message: string) => send({ jsonrpc: '2.0', id, error: { code, message } });
@@ -27,21 +29,27 @@ export function serveMcp(options: { root: string; allowNetwork: boolean; input: 
     }
     if (method === 'ping') return send({ jsonrpc: '2.0', id, result: {} });
     if (method === 'tools/list') {
-      return send({ jsonrpc: '2.0', id, result: { tools: available.map(t => ({ name: t.name, description: t.description,
-        inputSchema: { type: 'object', additionalProperties: false, required: Object.keys(t.args),
-          properties: Object.fromEntries(Object.entries(t.args).map(([key, description]) => [key, { type: 'string', description, maxLength: 1024 }])) } })) } });
+      return send({ jsonrpc: '2.0', id, result: { tools: available.map(entry => ({
+        name: entry.tool.name,
+        description: entry.tool.description,
+        inputSchema: entry.inputSchema,
+      })) } });
     }
     if (method === 'tools/call') {
-      const tool = available.find(t => t.name === params?.name);
-      const args = params?.arguments === undefined ? {} : params?.arguments;
-      if (!tool || !args || typeof args !== 'object' || Array.isArray(args)
-        || Object.keys(args).sort().join() !== Object.keys(tool.args).sort().join()
-        || Object.values(args).some(v => typeof v !== 'string' || v.length > 1024)) return fail(id, -32602, 'Unknown tool or invalid arguments');
+      const entry = available.find(e => e.tool.name === params?.name);
+      if (!entry) return fail(id, -32602, 'Unknown tool or invalid arguments');
+      const rawArgs = params?.arguments === undefined ? {} : params?.arguments;
+      let parsedArgs: Record<string, string>;
+      try {
+        parsedArgs = entry.validator.parse(rawArgs, '');
+      } catch (err) {
+        return fail(id, -32602, `Invalid arguments: ${safeErrorMessage(err)}`);
+      }
       if (controller?.signal.aborted) {
         return send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: 'BBA: Operation cancelled' }], isError: true } });
       }
       try {
-        const result = await tool.run(args as Record<string, string>, path, controller?.signal);
+        const result = await entry.tool.run(parsedArgs, path, controller?.signal);
         return send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: typeof result === 'string' ? result : JSON.stringify(result, null, 2) }], isError: false } });
       } catch (error) {
         return send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: 'BBA: ' + safeErrorMessage(error) }], isError: true } });

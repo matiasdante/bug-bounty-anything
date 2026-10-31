@@ -4,6 +4,7 @@ import { canonical, digest, validateBundle } from './contracts.ts';
 import type { Bundle, Investigation } from './contracts.ts';
 import { evaluate } from './investigation.ts';
 import { renderReport } from './report.ts';
+import type { Lang } from './i18n.ts';
 
 export function verify(bundle: unknown): asserts bundle is Bundle {
   validateBundle(bundle);
@@ -21,7 +22,7 @@ export async function requireNewDirectory(path: string): Promise<string> {
   throw new Error('Output already exists; choose a new directory');
 }
 
-export async function saveInvestigation(path: string, investigation: Investigation): Promise<void> {
+export async function saveInvestigation(path: string, investigation: Investigation, lang: Lang = 'es'): Promise<void> {
   const target = await requireNewDirectory(path);
   const bundle: Bundle = { investigation, sha256: digest(investigation) };
   verify(bundle);
@@ -32,7 +33,7 @@ export async function saveInvestigation(path: string, investigation: Investigati
   const marker = join(target, '.incomplete');
   await writeFile(marker, 'BBA write in progress\n', { flag: 'wx' });
   await writeFile(join(target, 'investigation.json'), JSON.stringify(bundle, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
-  await writeFile(join(target, 'report.md'), renderReport(investigation), { flag: 'wx', mode: 0o600 });
+  await writeFile(join(target, 'report.md'), renderReport(investigation, lang), { flag: 'wx', mode: 0o600 });
   await rm(marker);
 }
 
@@ -63,7 +64,7 @@ export async function loadInvestigation(path: string): Promise<Investigation> {
   return bundle.investigation;
 }
 
-export async function exportReport(folder: string, output: string): Promise<void> {
+export async function exportReport(folder: string, output: string, lang: Lang = 'es'): Promise<void> {
   const investigation = await loadInvestigation(folder);
-  await writeFile(resolve(output), renderReport(investigation), { flag: 'wx', mode: 0o600 });
+  await writeFile(resolve(output), renderReport(investigation, lang), { flag: 'wx', mode: 0o600 });
 }

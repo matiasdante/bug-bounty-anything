@@ -1,7 +1,6 @@
-import { mkdirSync, openSync, writeSync, fsyncSync, closeSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { setTimeout as delay } from 'node:timers/promises';
 import { digest } from './contracts.ts';
 import { credentialFor, scopedRequest } from './http.ts';
 import { assertAuthorized, fields, strictUrl, validateScope } from './scope.ts';
@@ -10,6 +9,8 @@ import { validateHeaderEnvironment } from './headers.ts';
 import type { ProgramBudget } from './budget.ts';
 import { randomUUID } from 'node:crypto';
 import { sealArtifact } from './artifacts.ts';
+import { openAppendJournal, waitIntervalOrDeadline } from './journal.ts';
+import type { Lang } from './i18n.ts';
 
 export type HuntConfig = {
   schemaVersion: 1; seed: string; identityUrl: string; identityField: string;
@@ -47,7 +48,7 @@ export function discoverLinks(body: string, base: string, scope: Scope): string[
 
 export async function hunt(folder: string, scope: Scope, config: HuntConfig, options: {
   credentials?: Record<string, string | undefined>; signal?: AbortSignal;
-  budget?: ProgramBudget;
+  budget?: ProgramBudget; lang?: Lang;
 } = {}) {
   validateScope(scope); validateHunt(config, scope);
   if (scope.budgetId && !options.budget) throw new Error('Shared program budget runtime is required');
@@ -56,8 +57,8 @@ export async function hunt(folder: string, scope: Scope, config: HuntConfig, opt
   if (values.some(v => !v) || values[0] === values[1]) throw new Error('Distinct controlled credentials are required');
   const credentials = values.map((v, i) => credentialFor(config.accounts[i], v!));
   mkdirSync(dirname(folder), { recursive: true }); mkdirSync(folder);
-  const journal = openSync(join(folder, 'requests.jsonl'), 'wx', 0o600);
-  const append = (event: unknown) => { writeSync(journal, JSON.stringify(event) + '\n'); fsyncSync(journal); };
+  const journal = openAppendJournal(folder);
+  const append = journal.append;
   const started = Date.now(), deadline = started + scope.limits.maxDurationMs;
   const huntId = randomUUID();
   const traces: Trace[] = [], findings: HuntFinding[] = [];
@@ -66,11 +67,7 @@ export async function hunt(folder: string, scope: Scope, config: HuntConfig, opt
     if (options.signal?.aborted) throw new Error('cancelled');
     assertAuthorized(scope, url);
     if (used >= scope.limits.maxRequests) throw new Error('budget-exhausted');
-    const wait = Math.max(0, lastEnd + scope.limits.minIntervalMs - Date.now());
-    if (Date.now() + wait >= deadline) throw new Error('deadline');
-    if (wait) await delay(wait, undefined, { signal: options.signal });
-    if (options.signal?.aborted) throw new Error('cancelled');
-    if (Date.now() >= deadline) throw new Error('deadline');
+    await waitIntervalOrDeadline(lastEnd, scope.limits.minIntervalMs, deadline, options.signal);
     assertAuthorized(scope, url);
     const id = ++used, label = account === null ? null : config.accounts[account];
     append({ event: 'reserved', id, url, account: label, at: new Date().toISOString() });
@@ -137,7 +134,7 @@ export async function hunt(folder: string, scope: Scope, config: HuntConfig, opt
     const code = error instanceof Error ? error.message : '';
     stopped = options.signal?.aborted ? 'cancelled' : ['cancelled', 'budget-exhausted', 'deadline', 'unsafe-response', 'identity-not-established'].includes(code) ? code : 'execution-failed';
   } finally {
-    try { append({ event: 'finish', stopped, requests: used }); } finally { closeSync(journal); }
+    try { append({ event: 'finish', stopped, requests: used }); } finally { journal.close(); }
   }
   const result = { schemaVersion: 1, id: huntId, scopeDigest: digest(scope), configDigest: digest(config), requests: used, stopped, surface, findings,
     limitations: ['Read-only owner-only BOLA workflow; rule and controlled-account ownership are supplied by the operator.',
@@ -145,12 +142,22 @@ export async function hunt(folder: string, scope: Scope, config: HuntConfig, opt
       'Redacted field-equality proof, HTTP metadata and digests are retained. Original values and credentials are not retained.',
       'No resume or automatic retries for hunts; requests.jsonl retains durable reservations after a crash. Review before starting a new hunt.'] };
   writeFileSync(join(folder, 'hunt.json'), JSON.stringify({ result, sha256: digest(result) }, null, 2), { flag: 'wx', mode: 0o600 });
-  const lines = findings.map((f, i) => `### ${i + 1}. ${f.status}: lectura entre cuentas\n\nRecurso: \`${f.url}\`.\n\n${f.reason}\n\nEvidencia: ${f.evidence.join(', ')} en requests.jsonl.\n`);
-  writeFileSync(join(folder, 'report.md'), `# BBA — reporte preparado para revisión\n\nClase: BOLA / CWE-639. Detención: ${stopped ?? 'ninguna'}. Requests: ${used}.\n\n`
-    + `## Regla y precondiciones\n\nEl operador declara acceso exclusivo del propietario, dos cuentas de prueba sin permisos compartidos y campos \`${config.ownerField}\` / \`${config.privateField}\` con esa semántica. Debe verificarlo contra las reglas del servicio antes de enviar.\n\n`
-    + `## Reproducción\n\n1. Usá dos cuentas de prueba sin permisos compartidos, indicadas por ${config.accounts.join(' y ')}; no publiques sus credenciales.\n2. GET ${config.identityUrl} como cada cuenta: comprobá identidades distintas en ${config.identityField}.\n3. Seguí enlaces desde ${config.seed} para obtener un recurso propio; no enumeres datos de terceros.\n4. GET al recurso como propietario, sin sesión y como la otra cuenta.\n5. Compará ${config.ownerField} y el campo protegido ${config.privateField}; consultá las referencias de evidencia siguientes.\n\n`
-    + lines.join('\n') + `\n## Impacto y remediación\n\nSolo los casos confirmed demuestran lectura del campo de prueba entre las cuentas bajo la regla declarada. Aplicar autorización por recurso antes de devolver datos. No se probó escritura ni acceso masivo. No se asigna severidad de producción automáticamente.\n\n## Pendientes antes del envío\n\nRevisar alcance vigente, regla owner-only, duplicados, severidad e instrucciones del programa. Este borrador no fue enviado.\n\n`
-    + result.limitations.map(l => '- ' + l).join('\n'), { flag: 'wx', mode: 0o600 });
+  const en = options.lang === 'en';
+  const lines = findings.map((f, i) => en
+    ? `### ${i + 1}. ${f.status}: cross-account read\n\nResource: \`${f.url}\`.\n\n${f.reason}\n\nEvidence: ${f.evidence.join(', ')} in requests.jsonl.\n`
+    : `### ${i + 1}. ${f.status}: lectura entre cuentas\n\nRecurso: \`${f.url}\`.\n\n${f.reason}\n\nEvidencia: ${f.evidence.join(', ')} en requests.jsonl.\n`);
+  const md = en
+    ? `# BBA — draft report for review\n\nClass: BOLA / CWE-639. Stop reason: ${stopped ?? 'none'}. Requests: ${used}.\n\n`
+      + `## Rule and preconditions\n\nThe operator asserts owner-only access, two controlled test accounts without shared grants, and \`${config.ownerField}\` / \`${config.privateField}\` fields with that semantics. Verify against the service policy before submitting.\n\n`
+      + `## Reproduction\n\n1. Use two controlled test accounts without shared permissions, referenced by ${config.accounts.join(' and ')}; never publish credentials.\n2. GET ${config.identityUrl} as each account: confirm distinct identities in ${config.identityField}.\n3. Follow links from ${config.seed} to locate an owned resource; never enumerate third-party data.\n4. GET the resource as owner, unauthenticated, and as the second account.\n5. Compare ${config.ownerField} and protected field ${config.privateField}; review the evidence references below.\n\n`
+      + lines.join('\n') + `\n## Impact and remediation\n\nOnly confirmed cases demonstrate cross-account read of the test field under the declared rule. Enforce per-resource authorization before returning data. Writes and bulk access were not tested. Production severity is not assigned automatically.\n\n## Pre-submission checklist\n\nVerify active scope, owner-only rule, duplicates, severity and program instructions. This draft was not submitted.\n\n`
+      + result.limitations.map(l => '- ' + l).join('\n')
+    : `# BBA — reporte preparado para revisión\n\nClase: BOLA / CWE-639. Detención: ${stopped ?? 'ninguna'}. Requests: ${used}.\n\n`
+      + `## Regla y precondiciones\n\nEl operador declara acceso exclusivo del propietario, dos cuentas de prueba sin permisos compartidos y campos \`${config.ownerField}\` / \`${config.privateField}\` con esa semántica. Debe verificarlo contra las reglas del servicio antes de enviar.\n\n`
+      + `## Reproducción\n\n1. Usá dos cuentas de prueba sin permisos compartidos, indicadas por ${config.accounts.join(' y ')}; no publiques sus credenciales.\n2. GET ${config.identityUrl} como cada cuenta: comprobá identidades distintas en ${config.identityField}.\n3. Seguí enlaces desde ${config.seed} para obtener un recurso propio; no enumeres datos de terceros.\n4. GET al recurso como propietario, sin sesión y como la otra cuenta.\n5. Compará ${config.ownerField} y el campo protegido ${config.privateField}; consultá las referencias de evidencia siguientes.\n\n`
+      + lines.join('\n') + `\n## Impacto y remediación\n\nSolo los casos confirmed demuestran lectura del campo de prueba entre las cuentas bajo la regla declarada. Aplicar autorización por recurso antes de devolver datos. No se probó escritura ni acceso masivo. No se asigna severidad de producción automáticamente.\n\n## Pendientes antes del envío\n\nRevisar alcance vigente, regla owner-only, duplicados, severidad e instrucciones del programa. Este borrador no fue enviado.\n\n`
+      + result.limitations.map(l => '- ' + l).join('\n');
+  writeFileSync(join(folder, 'report.md'), md, { flag: 'wx', mode: 0o600 });
   sealArtifact(folder, { kind: 'hunt', id: huntId, scopeDigest: digest(scope), configDigest: digest(config) });
   return result;
 }

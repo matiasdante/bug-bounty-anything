@@ -5,14 +5,23 @@ export const methods = ['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELET
 export type Method = typeof methods[number];
 export type RequestSpec = { method: Method; query?: { name: string; valueEnv: string }[];
   body?: { format: 'json' | 'form' | 'text'; valueEnv: string } };
+export type ScopeRule = { origin: string; paths: string[]; pathPrefixes?: string[] };
+export type RequestRule = {
+  origin: string;
+  path?: string;
+  pathPrefix?: string;
+  method: Method;
+  queryNames: string[];
+  bodyFormats: ('json' | 'form' | 'text')[];
+};
 export type Scope = {
   schemaVersion: 1;
   mode: 'loopback-lab' | 'public-https';
   authorization: { reference: string; validFrom: string; validUntil: string };
-  allowed: { origin: string; paths: string[] }[];
-  excluded: { origin: string; paths: string[] }[];
+  allowed: ScopeRule[];
+  excluded: ScopeRule[];
   requestHeaders?: { origin: string; name: string; valueEnv: string }[];
-  requestRules?: { origin: string; path: string; method: Method; queryNames: string[]; bodyFormats: ('json' | 'form' | 'text')[] }[];
+  requestRules?: RequestRule[];
   budgetId?: string;
   limits: { maxRequests: number; minIntervalMs: number; timeoutMs: number; maxResponseBytes: number; maxDurationMs: number };
 };
@@ -63,6 +72,64 @@ export function strictUrl(value: unknown): URL {
   return url;
 }
 
+export const queryParamNameRegex = /^[A-Za-z0-9_.-]+(?:\[[A-Za-z0-9_.-]*\]){0,4}$/;
+const templatePlaceholderRegex = /^\{[A-Za-z_][A-Za-z0-9_]{0,63}\}$/;
+
+function validateScopePathPattern(origin: string, pattern: unknown): string {
+  if (typeof pattern !== 'string' || !pattern.startsWith('/') || pattern.startsWith('//') || pattern.length > 2048) {
+    throw new Error('Invalid scope path');
+  }
+  if (!pattern.includes('{') && !pattern.includes('}')) {
+    if (strictUrl(origin + pattern).pathname !== pattern) throw new Error('Invalid scope path');
+    return pattern;
+  }
+  const segments = pattern.slice(1).split('/');
+  const concrete = '/' + segments.map(seg => {
+    if (templatePlaceholderRegex.test(seg)) return 'sample';
+    if (seg.includes('{') || seg.includes('}')) throw new Error('Invalid scope path');
+    return seg;
+  }).join('/');
+  if (strictUrl(origin + concrete).pathname !== concrete) throw new Error('Invalid scope path');
+  return pattern;
+}
+
+function validateScopePathPrefix(origin: string, prefix: unknown): string {
+  if (typeof prefix !== 'string' || !prefix.startsWith('/') || prefix.startsWith('//') || prefix.length > 512
+    || prefix.includes('{') || prefix.includes('}')) {
+    throw new Error('Invalid scope path prefix');
+  }
+  if (strictUrl(origin + prefix).pathname !== prefix) throw new Error('Invalid scope path prefix');
+  return prefix;
+}
+
+export function matchesPathPattern(pattern: string, pathname: string): boolean {
+  if (!pattern.includes('{')) return pattern === pathname;
+  const patParts = pattern.split('/');
+  const actParts = pathname.split('/');
+  if (patParts.length !== actParts.length) return false;
+  for (let i = 1; i < patParts.length; i++) {
+    if (templatePlaceholderRegex.test(patParts[i])) {
+      if (!actParts[i]) return false;
+    } else if (patParts[i] !== actParts[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function matchesPathPrefix(prefix: string, pathname: string): boolean {
+  if (prefix === '/') return pathname.startsWith('/');
+  const clean = prefix.endsWith('/') ? prefix.slice(0, -1) : prefix;
+  return pathname === clean || pathname.startsWith(clean + '/');
+}
+
+export function matchesScopeRule(rule: ScopeRule, url: URL): boolean {
+  if (rule.origin !== url.origin) return false;
+  if (rule.paths.some(p => matchesPathPattern(p, url.pathname))) return true;
+  if (rule.pathPrefixes?.some(pref => matchesPathPrefix(pref, url.pathname))) return true;
+  return false;
+}
+
 export function validateScope(value: unknown): asserts value is Scope {
   optionalFields(value, ['schemaVersion', 'mode', 'authorization', 'allowed', 'excluded', 'limits'], ['requestHeaders', 'requestRules', 'budgetId']);
   if (value.budgetId !== undefined && (typeof value.budgetId !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(value.budgetId))) throw new Error('Invalid shared budget ID');
@@ -77,18 +144,22 @@ export function validateScope(value: unknown): asserts value is Scope {
     if (!Array.isArray(rules) || rules.length > 20 || (key === 'allowed' && !rules.length)) throw new Error('Invalid scope rules');
     const origins = new Set();
     for (const rule of rules) {
-      fields(rule, ['origin', 'paths']);
+      optionalFields(rule, ['origin', 'paths'], ['pathPrefixes']);
       const url = strictUrl(rule.origin + '/');
       if (url.origin !== rule.origin || origins.has(rule.origin)) throw new Error('Invalid scope origin');
       origins.add(rule.origin);
       if (value.mode === 'loopback-lab') {
         if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || !url.port) throw new Error('Invalid loopback origin');
       } else if (url.protocol !== 'https:') throw new Error('Public targets require HTTPS');
-      if (!Array.isArray(rule.paths) || !rule.paths.length || rule.paths.length > 100
-        || new Set(rule.paths).size !== rule.paths.length) throw new Error('Invalid scope paths');
-      for (const path of rule.paths) {
-        if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//')
-          || strictUrl(rule.origin + path).pathname !== path) throw new Error('Invalid scope path');
+      const hasPrefixes = rule.pathPrefixes !== undefined;
+      if (!Array.isArray(rule.paths) || rule.paths.length > 100
+        || new Set(rule.paths).size !== rule.paths.length
+        || (!hasPrefixes && !rule.paths.length)) throw new Error('Invalid scope paths');
+      for (const path of rule.paths) validateScopePathPattern(rule.origin, path);
+      if (rule.pathPrefixes !== undefined) {
+        if (!Array.isArray(rule.pathPrefixes) || !rule.pathPrefixes.length || rule.pathPrefixes.length > 50
+          || new Set(rule.pathPrefixes).size !== rule.pathPrefixes.length) throw new Error('Invalid scope path prefixes');
+        for (const pref of rule.pathPrefixes) validateScopePathPrefix(rule.origin, pref);
       }
     }
   }
@@ -97,7 +168,7 @@ export function validateScope(value: unknown): asserts value is Scope {
     const seen = new Set<string>();
     for (const header of value.requestHeaders) {
       fields(header, ['origin', 'name', 'valueEnv']);
-      if (!value.allowed.some((rule: Scope['allowed'][number]) => rule.origin === header.origin)
+      if (!value.allowed.some((rule: ScopeRule) => rule.origin === header.origin)
         || typeof header.name !== 'string' || !/^(user-agent|x-[a-z0-9-]{1,60})$/.test(header.name)
         || typeof header.valueEnv !== 'string' || !/^BBA_HEADER_[A-Z0-9_]{1,50}$/.test(header.valueEnv)) throw new Error('Invalid identifying header');
       const key = header.origin + ':' + header.name;
@@ -109,13 +180,25 @@ export function validateScope(value: unknown): asserts value is Scope {
     if (!Array.isArray(value.requestRules) || value.requestRules.length > 100) throw new Error('Invalid request rules');
     const seen = new Set<string>();
     for (const rule of value.requestRules) {
-      fields(rule, ['origin', 'path', 'method', 'queryNames', 'bodyFormats']);
-      if (typeof rule.origin !== 'string' || typeof rule.path !== 'string' || !methods.includes(rule.method)) throw new Error('Invalid request rule');
-      assertAuthorized(value as Scope, rule.origin + rule.path, Date.parse(auth.validFrom));
-      const key = rule.origin + rule.path + ':' + rule.method;
-      if (seen.has(key)) throw new Error('Duplicate request rule'); seen.add(key);
+      optionalFields(rule, ['origin', 'method', 'queryNames', 'bodyFormats'], ['path', 'pathPrefix']);
+      if (typeof rule.origin !== 'string' || !methods.includes(rule.method)
+        || (rule.path === undefined) === (rule.pathPrefix === undefined)) throw new Error('Invalid request rule');
+      let samplePath: string;
+      let ruleKey: string;
+      if (rule.path !== undefined) {
+        validateScopePathPattern(rule.origin, rule.path);
+        samplePath = '/' + rule.path.slice(1).split('/').map((s: string) => templatePlaceholderRegex.test(s) ? 'sample' : s).join('/');
+        ruleKey = rule.origin + ':path:' + rule.path + ':' + rule.method;
+      } else {
+        validateScopePathPrefix(rule.origin, rule.pathPrefix);
+        samplePath = rule.pathPrefix;
+        ruleKey = rule.origin + ':prefix:' + rule.pathPrefix + ':' + rule.method;
+      }
+      assertAuthorized(value as Scope, rule.origin + samplePath, Date.parse(auth.validFrom));
+      if (seen.has(ruleKey)) throw new Error('Duplicate request rule');
+      seen.add(ruleKey);
       if (!Array.isArray(rule.queryNames) || rule.queryNames.length > 20 || new Set(rule.queryNames).size !== rule.queryNames.length
-        || rule.queryNames.some((n: unknown) => typeof n !== 'string' || !/^[A-Za-z0-9_.-]{1,64}$/.test(n))) throw new Error('Invalid query names');
+        || rule.queryNames.some((n: unknown) => typeof n !== 'string' || n.length > 64 || !queryParamNameRegex.test(n))) throw new Error('Invalid query names');
       if (!Array.isArray(rule.bodyFormats) || rule.bodyFormats.length > 3 || new Set(rule.bodyFormats).size !== rule.bodyFormats.length
         || rule.bodyFormats.some((f: unknown) => !['json', 'form', 'text'].includes(f as string))
         || (['GET', 'HEAD'].includes(rule.method) && rule.bodyFormats.length)) throw new Error('Invalid body formats');
@@ -132,8 +215,9 @@ export function validateScope(value: unknown): asserts value is Scope {
 export function assertAuthorized(scope: Scope, urlText: string, now = Date.now()): URL {
   const url = strictUrl(urlText);
   if (now < Date.parse(scope.authorization.validFrom) || now >= Date.parse(scope.authorization.validUntil)) throw new Error('Authorization expired or not active');
-  const match = (rule: Scope['allowed'][number]) => rule.origin === url.origin && rule.paths.includes(url.pathname);
-  if (!scope.allowed.some(match) || scope.excluded.some(match)) throw new Error('Request blocked: outside scope');
+  if (!scope.allowed.some(rule => matchesScopeRule(rule, url)) || scope.excluded.some(rule => matchesScopeRule(rule, url))) {
+    throw new Error('Request blocked: outside scope');
+  }
   return url;
 }
 
@@ -164,7 +248,7 @@ export function assertRequestAllowed(scope: Scope, urlText: string, spec: Reques
     const seen = new Set<string>();
     for (const q of spec.query) {
       fields(q, ['name', 'valueEnv']);
-      if (typeof q.name !== 'string' || !/^[A-Za-z0-9_.-]{1,64}$/.test(q.name) || seen.has(q.name)
+      if (typeof q.name !== 'string' || q.name.length > 64 || !queryParamNameRegex.test(q.name) || seen.has(q.name)
         || typeof q.valueEnv !== 'string' || !/^BBA_INPUT_[A-Z0-9_]{1,50}$/.test(q.valueEnv)) throw new Error('Invalid query reference');
       seen.add(q.name);
     }
@@ -175,7 +259,11 @@ export function assertRequestAllowed(scope: Scope, urlText: string, spec: Reques
       || typeof spec.body.valueEnv !== 'string' || !/^BBA_BODY_[A-Z0-9_]{1,50}$/.test(spec.body.valueEnv)) throw new Error('Invalid body reference');
   }
   if (spec.method !== 'GET' || spec.query || spec.body) {
-    const rule = scope.requestRules?.find(r => r.origin === url.origin && r.path === url.pathname && r.method === spec.method);
+    const rule = scope.requestRules?.find(r =>
+      r.origin === url.origin
+      && r.method === spec.method
+      && (r.path !== undefined ? matchesPathPattern(r.path, url.pathname) : r.pathPrefix !== undefined && matchesPathPrefix(r.pathPrefix, url.pathname)),
+    );
     if (!rule || spec.query?.some(q => !rule.queryNames.includes(q.name)) || (spec.body && !rule.bodyFormats.includes(spec.body.format))) throw new Error('Request blocked: method or inputs outside scope');
   }
   return url;

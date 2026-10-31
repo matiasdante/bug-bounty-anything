@@ -28,11 +28,30 @@ import { cacheCheck, resumeCacheCheck, validateCacheCheck } from './cache-check.
 import { raceCheck, validateRaceCheck } from './race-check.ts';
 import { csrfCheck, validateCsrfCheck } from './csrf-check.ts';
 import { normalizePlatformPath } from './paths.ts';
+import { enm, obj, str } from './schema.ts';
+import type { JsonSchema, Validator } from './schema.ts';
+
+export type ArgDef = string | Validator<string>;
 
 export type Tool = {
-  name: string; description: string; network: boolean; args: Record<string, string>;
+  name: string;
+  description: string;
+  network: boolean;
+  args: Record<string, ArgDef>;
   run: (args: Record<string, string>, path: (value: string) => string, signal?: AbortSignal) => Promise<unknown>;
 };
+
+export function buildToolValidator(args: Record<string, ArgDef>): {
+  validator: Validator<Record<string, string>>;
+  inputSchema: JsonSchema;
+} {
+  const shape: Record<string, Validator<string>> = {};
+  for (const [key, spec] of Object.entries(args)) {
+    shape[key] = typeof spec === 'string' ? str({ description: spec, minLength: 1, maxLength: 1024 }) : spec;
+  }
+  const validator = obj(shape) as unknown as Validator<Record<string, string>>;
+  return { validator, inputSchema: validator.toJsonSchema() };
+}
 
 // Every path is resolved inside the workspace root; the server never takes credentials as arguments.
 // Links are followed on the deepest existing ancestor, so a link inside the root cannot lead out of it.
@@ -58,13 +77,21 @@ export const tools: Tool[] = [
     args: { target: 'Canonical target URL', out: 'New campaign directory' },
     run: async (a, p) => openCampaign(p(a.out), a.target) },
   { name: 'campaign_link', network: false, description: 'Validate and attach a scope, declared policy review, surface, page capture, controlled profile, completed run or draft report inside a campaign. Immutable digest chain; no requests.',
-    args: { campaign: 'Campaign directory', kind: 'scope, policy, surface, page, profile, run or report', artifact: 'Artifact inside campaign directory' },
+    args: {
+      campaign: 'Campaign directory',
+      kind: enm(['scope', 'policy', 'surface', 'page', 'profile', 'run', 'report'], { description: 'scope, policy, surface, page, profile, run or report' }),
+      artifact: 'Artifact inside campaign directory',
+    },
     run: async (a, p) => linkCampaign(p(a.campaign), a.kind, p(a.artifact)) },
   { name: 'campaign_status', network: false, description: 'Verify all linked campaign artifacts, report budget and blockers, and recommend the next supported step. Does not confirm permission or a vulnerability.',
     args: { campaign: 'Campaign directory' }, run: async (a, p) => campaignStatus(p(a.campaign)) },
   { name: 'campaign_policy_review', network: false, description: 'Bind a saved local policy-source.txt by SHA-256 to the current scope and an explicit operator decision. Does not fetch policy or verify owner permission.',
-    args: { campaign: 'Campaign directory containing scope and policy-source.txt', sourceUrl: 'Official policy or owner authorization HTTPS URL',
-      sourceKind: 'official-program-policy or owner-written-authorization', decision: 'authorized or uncertain' },
+    args: {
+      campaign: 'Campaign directory containing scope and policy-source.txt',
+      sourceUrl: 'Official policy or owner authorization HTTPS URL',
+      sourceKind: enm(['official-program-policy', 'owner-written-authorization'], { description: 'official-program-policy or owner-written-authorization' }),
+      decision: enm(['authorized', 'uncertain'], { description: 'authorized or uncertain' }),
+    },
     run: async (a, p) => preparePolicyReview(p(a.campaign), a.sourceUrl,
       a.sourceKind as 'official-program-policy' | 'owner-written-authorization', a.decision as 'authorized' | 'uncertain') },
   { name: 'campaign_capture', network: true, description: 'SENDS BOUNDED GET REQUESTS. Capture the exact campaign target after an operator policy review and scoped budget. Saves page facts and an observed surface. One attempt per campaign.',
@@ -191,10 +218,19 @@ export const tools: Tool[] = [
       return 'Scope, plan and time window are valid; owner permission was not verified and no request was sent.';
     } },
   { name: 'import_surface', network: false, description: 'Project an endpoint inventory from a HAR 1.2, Swagger 2.0/OpenAPI 3.x JSON or REA capture Evidence file. Offline.',
-    args: { format: 'har, openapi or rea', input: 'Path to the source JSON', out: 'New output file' },
+    args: {
+      format: enm(['har', 'openapi', 'rea'], { description: 'har, openapi or rea' }),
+      input: 'Path to the source JSON',
+      out: 'New output file',
+    },
     run: async (a, p) => surfaceSummary(importSurfaceFile(p(a.input), a.format as Surface['format'], p(a.out))) },
   { name: 'import_candidates', network: false, description: 'Normalize ZAP, Nuclei or Subfinder output into unvalidated candidates compared with the scope. Nothing is executed or contacted.',
-    args: { format: 'zap, nuclei or subfinder', input: 'Path to the scanner output', scope: 'Path to scope.json', out: 'New output file' },
+    args: {
+      format: enm(['zap', 'nuclei', 'subfinder'], { description: 'zap, nuclei or subfinder' }),
+      input: 'Path to the scanner output',
+      scope: 'Path to scope.json',
+      out: 'New output file',
+    },
     run: async (a, p) => candidateSummary(importCandidatesFile(p(a.input), a.format as Candidate['source'], readJson(p(a.scope)), p(a.out))) },
   { name: 'inspect_run', network: false, description: 'Verify a run folder and summarize its checkpoints. Offline.',
     args: { run: 'Run folder created by run' }, run: async (a, p) => sessionSummary(inspectSession(p(a.run))) },

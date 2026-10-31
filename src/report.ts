@@ -1,4 +1,5 @@
 import type { Investigation } from './contracts.ts';
+import type { Lang } from './i18n.ts';
 
 export function summary(inv: Investigation) {
   return {
@@ -9,8 +10,56 @@ export function summary(inv: Investigation) {
   };
 }
 
-export function renderReport(inv: Investigation): string {
+export function renderReport(inv: Investigation, lang: Lang = 'es'): string {
   const result = summary(inv);
+  if (lang === 'en') {
+    return `# BBA — laboratory report
+
+Investigation: \`${inv.id}\` · UTC Date: ${inv.createdAt}
+
+Variant: **${inv.environment.variant}** · BBA: ${inv.toolVersion} · Contract: ${inv.schemaVersion}
+
+Outcome: **${result.confirmed} confirmed**, ${result.notReproduced} not reproduced, ${result.unresolved} unresolved.
+
+## Scope and authorization
+
+Disposable laboratory started by BBA at \`${inv.environment.origin}\`, with two accounts and private synthetic documents. Executed ${result.requests} GET requests out of a maximum budget of ${inv.environment.requestBudget}. The server has been closed; that address must not be reused as a target.
+
+Cross-account read (IDOR/BOLA, CWE-639) was evaluated. Both directions test a single root cause, not two independent vulnerabilities. Variant is laboratory metadata; the evaluator decides strictly from responses and controls.
+
+## Reproduction
+
+1. From this project, with Node 22.13 or newer, run \`npm run bba -- lab --variant ${inv.environment.variant} --out runs/reproduction\` using a non-existent directory.
+2. BBA creates accounts A/B with distinct ephemeral credentials and one private document per account. Identifiers and markers change on every run.
+3. Verify anonymous denial and authorized owner reads for both owners.
+4. Read document B as A and document A as B; compare content against each owner baseline.
+5. Inspect \`investigation.json\` and \`report.md\` in the generated directory.
+
+## Hypothesis outcomes
+${inv.findings.map(f => `
+### ${f.id}: ${f.status}
+
+- Actor: \`${f.actor}\`; expected owner: \`${f.owner}\`.
+- Resource: \`/documents/${f.documentId}\`.
+- Observation: ${f.observation}
+- Evidence: ${f.evidenceIds.map(id => '\`' + id + '\`').join(', ')}.
+- Limitation: ${f.limitation}
+`).join('')}
+## Reproducible evidence
+
+Only a projection of the synthetic contract is retained, never a full HTTP capture. Credentials and sensitive headers are omitted.
+
+\`\`\`json
+${JSON.stringify(inv.evidence, null, 2)}
+\`\`\`
+
+## Impact and remediation
+
+${result.confirmed ? 'Cross-account read of private synthetic data was demonstrated. Validate server-side document ownership before returning data; the fixed variant enforces that check.' : 'Unauthorized read was not confirmed by these checks. Denial on this path does not establish global safety.'}
+
+Production CVSS is not assigned to a laboratory. Writes, deletes, enumeration and other endpoints were not tested. Transport errors abort execution without producing a success report. Local draft; not submitted.
+`;
+  }
   return `# BBA — informe de laboratorio
 
 Investigación: \`${inv.id}\` · Fecha UTC: ${inv.createdAt}
@@ -27,7 +76,7 @@ Se evaluó lectura entre cuentas (IDOR/BOLA, CWE-639). Las dos direcciones son p
 
 ## Reproducción
 
-1. Desde este proyecto, con Node 26 o posterior, ejecutá \`npm run bba -- lab --variant ${inv.environment.variant} --out runs/reproduction\` usando una carpeta que no exista.
+1. Desde este proyecto, con Node 22.13 o posterior, ejecutá \`npm run bba -- lab --variant ${inv.environment.variant} --out runs/reproduction\` usando una carpeta que no exista.
 2. BBA crea cuentas A/B con credenciales efímeras distintas y un documento privado por cuenta. Los identificadores y marcadores cambian en cada ejecución.
 3. Comprueba acceso anónimo denegado y lectura autorizada de ambos propietarios.
 4. Repite la lectura del documento B como A, y del documento A como B; compara el contenido con la respuesta del propietario.

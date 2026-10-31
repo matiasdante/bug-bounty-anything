@@ -1,7 +1,8 @@
 import { closeSync, fstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { digest } from './contracts.ts';
-import { validateScope } from './scope.ts';
+import { matchesScopeRule, validateScope } from './scope.ts';
 import type { Scope } from './scope.ts';
+import pkg from '../package.json' with { type: 'json' };
 
 export type Candidate = {
   id: string; source: 'zap' | 'nuclei' | 'subfinder'; kind: 'endpoint' | 'host';
@@ -11,7 +12,7 @@ export type Candidate = {
   status: 'unvalidated'; locator: string;
 };
 export type CandidateSet = {
-  schemaVersion: 1; toolVersion: '0.7.0'; format: Candidate['source']; sourceDigest: string; scopeDigest: string;
+  schemaVersion: 1; toolVersion: '0.7.0'; producerVersion?: string; format: Candidate['source']; sourceDigest: string; scopeDigest: string;
   candidates: Candidate[]; duplicates: number; limitations: string[];
 };
 
@@ -55,7 +56,7 @@ function locate(scope: Scope, value: unknown) {
     url = new URL(value);
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error();
   } catch { return { origin: null, path: null, hasQuery: false, scopeStatus: 'unparseable' as const }; }
-  const match = (r: Scope['allowed'][number]) => r.origin === url.origin && r.paths.includes(url.pathname);
+  const match = (r: Scope['allowed'][number]) => matchesScopeRule(r, url);
   const scopeStatus = scope.excluded.some(match) ? 'excluded' as const : scope.allowed.some(match) ? 'in-scope' as const : 'out-of-scope' as const;
   return { origin: url.origin, path: url.pathname.slice(0, 2048), hasQuery: url.search !== '', scopeStatus };
 }
@@ -96,7 +97,7 @@ export function importCandidates(content: string, format: Candidate['source'], s
     const id = 'sha256:' + digest(identity);
     if (!unique.has(id)) unique.set(id, { id, ...item });
   }
-  return { schemaVersion: 1, toolVersion: '0.7.0', format, sourceDigest: digest(content), scopeDigest: digest(scope),
+  return { schemaVersion: 1, toolVersion: '0.7.0', producerVersion: pkg.version, format, sourceDigest: digest(content), scopeDigest: digest(scope),
     candidates: [...unique.values()], duplicates: found.length - unique.size, limitations: [
       'Imported claims only: no scanner was run and no URL was contacted. Every candidate is unvalidated; none is a confirmed finding.',
       'Descriptions, evidence, requests, responses and extracted values were dropped. Titles and paths can still be sensitive; review before sharing.',

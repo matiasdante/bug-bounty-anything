@@ -2,11 +2,12 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { digest } from './contracts.ts';
 import { executeSession } from './execution.ts';
-import { fields, validatePlan, validateScope } from './scope.ts';
+import { fields, queryParamNameRegex, validatePlan, validateScope } from './scope.ts';
 import type { Plan, Scope, Step } from './scope.ts';
 import { createSession, readJson } from './session.ts';
 import type { Session } from './session.ts';
 import type { ProgramBudget } from './budget.ts';
+import type { Lang } from './i18n.ts';
 
 export type CacheCheck = { schemaVersion: 1; class: 'cross-identity-cache'; policyReference: string;
   identityUrl: string; identityPointer: string; resourceUrl: string; protectedPointer: string;
@@ -29,7 +30,7 @@ export function validateCacheCheck(value: unknown, scope: Scope): asserts value 
     'accountA', 'accountB', 'bustQueryName', 'bustTokens']);
   if (value.schemaVersion !== 1 || value.class !== 'cross-identity-cache'
     || typeof value.policyReference !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9 ._:/-]{0,199}$/.test(value.policyReference)
-    || typeof value.bustQueryName !== 'string' || !/^[A-Za-z0-9_.-]{1,64}$/.test(value.bustQueryName)
+    || typeof value.bustQueryName !== 'string' || value.bustQueryName.length > 64 || !queryParamNameRegex.test(value.bustQueryName)
     || typeof value.identityPointer !== 'string' || typeof value.protectedPointer !== 'string'
     || !/^(\/(?:[^~]|~[01])*)?$/.test(value.identityPointer) || !/^(\/(?:[^~]|~[01])*)?$/.test(value.protectedPointer)
     || value.accountA === value.accountB || [value.accountA, value.accountB].some((n: unknown) => typeof n !== 'string' || !/^BBA_(TOKEN|COOKIE)_[A-Z0-9_]{1,50}$/.test(n))
@@ -66,7 +67,16 @@ export function evaluateCache(session: Session, c: CacheCheck) {
       'The operator must establish that the bust parameter is semantically inert and that the accounts have no shared grant.',
       'Only one controlled resource and two accounts were tested; no other data or write actions were probed.'] };
 }
-function report(result: ReturnType<typeof evaluateCache>, c: CacheCheck): string {
+function report(result: ReturnType<typeof evaluateCache>, c: CacheCheck, lang: Lang = 'es'): string {
+  if (lang === 'en') {
+    return `# BBA — cross-identity-cache: ${result.status}\n\nLocal draft; not submitted.\n\n`
+      + `## What it is\n\nProtected-field exposure between two owned accounts at \`${c.resourceUrl}\`, correlated with the shared URL under rule ${c.policyReference}.\n\n`
+      + `## How it was found\n\nVerified distinct server identities and anonymous denial, followed by cache-busted reads and the shared URL.\n\n`
+      + `## Exploitability proof\n\nStatus: **${result.status}**. ${result.reason} Evidence: ${result.evidence.map(id => '`' + id + '`').join(', ')}.\n\n`
+      + `## Reproduction\n\nUse two owned accounts and one resource. Confirm that \`${c.bustQueryName}\` is semantically inert, run the exact plan, and compare only the projected field.\n\n`
+      + `## Remediation\n\nMark private responses non-shareable and segment caches by identity/authorization.\n\n`
+      + `## Limitations\n\n${result.limitations.map(item => '- ' + item).join('\n')}\n`;
+  }
   return `# BBA — cross-identity-cache: ${result.status}\n\nBorrador no enviado.\n\n`
     + `## Qué es\n\nExposición de un campo protegido entre dos cuentas propias en \`${c.resourceUrl}\`, correlacionada con la URL compartida bajo la regla ${c.policyReference}.\n\n`
     + `## Cómo se encontró\n\nSe verificaron identidades distintas y denegación anónima, luego lecturas con cache busting y la URL compartida.\n\n`
@@ -75,27 +85,27 @@ function report(result: ReturnType<typeof evaluateCache>, c: CacheCheck): string
     + `## Cómo corregirlo\n\nMarcar respuestas privadas como no compartibles y segmentar cualquier cache por identidad/autorización. Validar permisos antes de servir respuestas almacenadas; agregar regresión con dos cuentas y la URL compartida.\n\n`
     + `## Límites\n\n${result.limitations.map(item => '- ' + item).join('\n')}\n`;
 }
-function save(folder: string, name: string, session: Session, c: CacheCheck) {
+function save(folder: string, name: string, session: Session, c: CacheCheck, lang: Lang = 'es') {
   const result = evaluateCache(session, c);
   writeFileSync(join(folder, name + '.json'), JSON.stringify({ result, sha256: digest(result) }, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
-  writeFileSync(join(folder, name + '.md'), report(result, c), { flag: 'wx', mode: 0o600 });
+  writeFileSync(join(folder, name + '.md'), report(result, c, lang), { flag: 'wx', mode: 0o600 });
   return result;
 }
-export async function cacheCheck(folder: string, scope: Scope, c: CacheCheck, options: { signal?: AbortSignal; budget?: ProgramBudget } = {}) {
+export async function cacheCheck(folder: string, scope: Scope, c: CacheCheck, options: { signal?: AbortSignal; budget?: ProgramBudget; lang?: Lang } = {}) {
   validateCacheCheck(c, scope);
   mkdirSync(dirname(folder), { recursive: true }); mkdirSync(folder);
   writeFileSync(join(folder, 'scope.json'), JSON.stringify(scope, null, 2), { flag: 'wx', mode: 0o600 });
   writeFileSync(join(folder, 'config.json'), JSON.stringify(c, null, 2), { flag: 'wx', mode: 0o600 });
   createSession(join(folder, 'run'), scope, plan(c));
   const session = await executeSession(join(folder, 'run'), scope, { ...options, credentials: inputs(c) });
-  return save(folder, 'cache-check', session, c);
+  return save(folder, 'cache-check', session, c, options.lang);
 }
-export async function resumeCacheCheck(folder: string, scope: Scope, c: CacheCheck, options: { signal?: AbortSignal; budget?: ProgramBudget } = {}) {
+export async function resumeCacheCheck(folder: string, scope: Scope, c: CacheCheck, options: { signal?: AbortSignal; budget?: ProgramBudget; lang?: Lang } = {}) {
   validateCacheCheck(c, scope);
   if (digest(readJson(join(folder, 'scope.json'))) !== digest(scope) || digest(readJson(join(folder, 'config.json'))) !== digest(c))
     throw new Error('Cache definition changed');
   if (existsSync(join(folder, 'cache-resumed.json')) || existsSync(join(folder, 'cache-resumed.md')))
     throw new Error('Resumed cache result already exists');
   const session = await executeSession(join(folder, 'run'), scope, { ...options, credentials: inputs(c) });
-  return save(folder, 'cache-resumed', session, c);
+  return save(folder, 'cache-resumed', session, c, options.lang);
 }

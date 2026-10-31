@@ -1,8 +1,8 @@
-import { createHash } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { readJson } from './session.ts';
 import { digest } from './contracts.ts';
-import { fields, strictUrl } from './scope.ts';
+import { fields, optionalFields, strictUrl } from './scope.ts';
+import pkg from '../package.json' with { type: 'json' };
 
 type Parameter = { location: string; name: string };
 type Endpoint = {
@@ -13,9 +13,9 @@ type Endpoint = {
   status: number | null; locator: string; ordinal: number | null;
 };
 export type Surface = {
-  schemaVersion: 1; toolVersion: '0.3.0'; sourceDigest: string;
+  schemaVersion: 1; toolVersion: '0.3.0'; producerVersion?: string; sourceDigest: string;
   format: 'har' | 'openapi' | 'rea'; reaEvidenceId: string | null;
-  entries: Endpoint[]; limitations: string[];
+  entries: Endpoint[]; skipped?: number; limitations: string[];
 };
 const methods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS', 'TRACE'];
 function record(value: any): Record<string, any> {
@@ -27,7 +27,9 @@ function list(value: any): any[] {
   return value;
 }
 function name(value: any): string {
-  if (typeof value !== 'string' || !/^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/.test(value)) throw new Error('Unsupported parameter name');
+  if (typeof value !== 'string' || value.length > 64 || !/^[A-Za-z_][A-Za-z0-9_.-]*(?:\[[A-Za-z0-9_.-]*\]){0,4}$/.test(value)) {
+    throw new Error('Unsupported parameter name');
+  }
   return value;
 }
 const surfaceSegmentRegex = /^(?:[A-Za-z0-9._~!$&'()*+,;=:@-]|%[0-9A-F]{2})*$/;
@@ -156,9 +158,9 @@ function openapi(doc: any): Endpoint[] {
   return result;
 }
 
-export function importSurface(input: unknown, format: Surface['format']): Surface {
+export function importSurface(input: unknown, format: Surface['format'], options: { quarantine?: boolean } = {}): Surface {
   const doc = record(input);
-  let entries: Endpoint[], reaEvidenceId: string | null = null;
+  let entries: Endpoint[], reaEvidenceId: string | null = null, skipped = 0;
   const limitations = ['Offline projection only; no URL was fetched and no authorization was granted.',
     'Headers, bodies, query values, examples and descriptions are omitted. Names and literal path segments can still be sensitive; review before sharing.',
     'Numeric, UUID-like and long path segments are replaced by opaque templates. Templates are not handler identity or executable URLs.',
@@ -166,7 +168,16 @@ export function importSurface(input: unknown, format: Surface['format']): Surfac
   if (format === 'har') {
     const log = record(doc.log);
     if (log.version !== '1.2') throw new Error('Only HAR 1.2 is supported');
-    entries = list(log.entries).map((e, i) => harEntry(e, i, '/log/entries/' + i));
+    entries = [];
+    for (const [i, e] of list(log.entries).entries()) {
+      try {
+        entries.push(harEntry(e, i, '/log/entries/' + i));
+      } catch (error) {
+        if (!options.quarantine) throw error;
+        skipped++;
+      }
+    }
+    if (skipped > 0) limitations.push(`Quarantine mode skipped ${skipped} unrepresentable HAR entries.`);
     limitations.push('Coverage is limited to supplied records, not the complete application or capture lifecycle.');
   } else if (format === 'openapi') {
     entries = openapi(doc);
@@ -180,19 +191,71 @@ export function importSurface(input: unknown, format: Surface['format']): Surfac
       || normalized.records.length !== normalized.total_records) throw new Error('Complete REA HAR records are required');
     reaEvidenceId = doc.evidence_id;
     const ordinals = new Set();
-    entries = list(normalized.records).map(r => {
+    entries = [];
+    for (const [idx, r] of list(normalized.records).entries()) {
       record(r);
       if (!Number.isInteger(r.ordinal) || r.ordinal < 0 || ordinals.has(r.ordinal)) throw new Error('Invalid REA ordinal');
       ordinals.add(r.ordinal);
-      return harEntry(r.reported, r.ordinal, '/normalized_result/records/' + (ordinals.size - 1) + '/reported');
-    });
+      try {
+        entries.push(harEntry(r.reported, r.ordinal, '/normalized_result/records/' + idx + '/reported'));
+      } catch (error) {
+        if (!options.quarantine) throw error;
+        skipped++;
+      }
+    }
+    if (skipped > 0) limitations.push(`Quarantine mode skipped ${skipped} unrepresentable REA records.`);
     limitations.push('REA Evidence ID is an attributed reference, not independently authenticated by BBA. Imported source limitations and redactions may hide fields; original Evidence must accompany review.');
   } else throw new Error('Unsupported surface format');
-  return { schemaVersion: 1, toolVersion: '0.3.0', sourceDigest: digest(input), format, reaEvidenceId, entries, limitations };
+  return {
+    schemaVersion: 1,
+    toolVersion: '0.3.0',
+    producerVersion: pkg.version,
+    sourceDigest: digest(input),
+    format,
+    reaEvidenceId,
+    entries,
+    ...(options.quarantine ? { skipped } : {}),
+    limitations,
+  };
 }
 
-export function importSurfaceFile(path: string, format: Surface['format'], output: string): Surface {
-  const surface = importSurface(readJson(path), format);
+export function projectCapturedHar(records: unknown[]): { surface: Surface; keptIndices: number[]; unrepresentable: number } {
+  const keptRecords: unknown[] = [];
+  const keptIndices: number[] = [];
+  const projectedEntries: Endpoint[] = [];
+  let unrepresentable = 0;
+  for (let i = 0; i < records.length; i++) {
+    try {
+      const ordinal = keptRecords.length;
+      projectedEntries.push(harEntry(records[i], ordinal, '/log/entries/' + ordinal));
+      keptRecords.push(records[i]);
+      keptIndices.push(i);
+    } catch {
+      unrepresentable++;
+    }
+  }
+  const sourceDoc = { log: { version: '1.2', entries: keptRecords } };
+  const surface: Surface = {
+    schemaVersion: 1,
+    toolVersion: '0.3.0',
+    producerVersion: pkg.version,
+    sourceDigest: digest(sourceDoc),
+    format: 'har',
+    reaEvidenceId: null,
+    entries: projectedEntries,
+    limitations: [
+      'Offline projection only; no URL was fetched and no authorization was granted.',
+      'Headers, bodies, query values, examples and descriptions are omitted. Names and literal path segments can still be sensitive; review before sharing.',
+      'Numeric, UUID-like and long path segments are replaced by opaque templates. Templates are not handler identity or executable URLs.',
+      'Credential presence does not establish a valid session, role, tenant or successful authentication.',
+      'Coverage is limited to supplied records, not the complete application or capture lifecycle.',
+    ],
+  };
+  return { surface, keptIndices, unrepresentable };
+}
+
+export function importSurfaceFile(path: string, format: Surface['format'], output: string, options: { quarantine?: boolean } = {}): Surface {
+  const surface = importSurface(readJson(path), format, options);
   writeFileSync(output, JSON.stringify({ surface, sha256: digest(surface) }, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
   return surface;
 }
@@ -200,14 +263,18 @@ export function surfaceSummary(surface: Surface) {
   const identities = new Set(surface.entries.map(e => [e.method, e.origin, e.path].join(' ')));
   return { format: surface.format, records: surface.entries.length, endpointCandidates: identities.size,
     observed: surface.entries.filter(e => e.basis === 'observed').length,
-    declared: surface.entries.filter(e => e.basis === 'declared').length, reaEvidenceId: surface.reaEvidenceId };
+    declared: surface.entries.filter(e => e.basis === 'declared').length,
+    ...(surface.skipped !== undefined ? { skipped: surface.skipped } : {}),
+    reaEvidenceId: surface.reaEvidenceId };
 }
 
 export function validateSurfaceBundle(value: unknown): asserts value is { surface: Surface; sha256: string } {
   fields(value, ['surface', 'sha256']);
   const s = value.surface;
-  fields(s, ['schemaVersion', 'toolVersion', 'sourceDigest', 'format', 'reaEvidenceId', 'entries', 'limitations']);
+  optionalFields(s, ['schemaVersion', 'toolVersion', 'sourceDigest', 'format', 'reaEvidenceId', 'entries', 'limitations'], ['producerVersion', 'skipped']);
   if (s.schemaVersion !== 1 || s.toolVersion !== '0.3.0' || !['har', 'openapi', 'rea'].includes(s.format)
+    || (s.producerVersion !== undefined && (typeof s.producerVersion !== 'string' || !/^\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(s.producerVersion)))
+    || (s.skipped !== undefined && (!Number.isSafeInteger(s.skipped) || s.skipped < 0))
     || typeof s.sourceDigest !== 'string' || !/^[a-f0-9]{64}$/.test(s.sourceDigest)
     || (s.reaEvidenceId !== null && (typeof s.reaEvidenceId !== 'string' || !/^[A-Za-z0-9:_.-]{1,200}$/.test(s.reaEvidenceId)))
     || !Array.isArray(s.entries) || s.entries.length > 5000 || !Array.isArray(s.limitations)

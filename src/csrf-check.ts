@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { closeSync, fsyncSync, mkdirSync, openSync, writeFileSync, writeSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { launchIsolated } from './capture.ts';
@@ -11,6 +11,8 @@ import type { Scope } from './scope.ts';
 import { validateHeaderEnvironment } from './headers.ts';
 import type { ProgramBudget } from './budget.ts';
 import { sealArtifact } from './artifacts.ts';
+import { openAppendJournal } from './journal.ts';
+import type { Lang } from './i18n.ts';
 
 export type CsrfCheck = { schemaVersion: 1; class: 'cross-origin-form'; policyReference: string;
   attackerPageUrl: string; stateUrl: string; actionUrl: string; cookieEnv: string; sameSite: 'Strict' | 'Lax' | 'None';
@@ -49,7 +51,8 @@ function parseCookies(cookieHeader: string | undefined): Map<string, string> {
 }
 
 export async function csrfCheck(folder: string, scope: Scope, config: CsrfCheck,
-  options: { signal?: AbortSignal; budget?: ProgramBudget; credentials?: Record<string, string | undefined> } = {}) {
+  options: { signal?: AbortSignal; budget?: ProgramBudget; credentials?: Record<string, string | undefined>; lang?: Lang } = {}) {
+  const lang = options.lang ?? 'es';
   validateCsrfCheck(config, scope);
   if (scope.budgetId && !options.budget) throw new Error('Shared program budget runtime is required');
   const env: Record<string, string | undefined> = { ...process.env, ...options.credentials,
@@ -62,8 +65,8 @@ export async function csrfCheck(folder: string, scope: Scope, config: CsrfCheck,
   mkdirSync(dirname(folder), { recursive: true }); mkdirSync(folder);
   writeFileSync(join(folder, 'scope.json'), JSON.stringify(scope, null, 2), { flag: 'wx', mode: 0o600 });
   writeFileSync(join(folder, 'config.json'), JSON.stringify(config, null, 2), { flag: 'wx', mode: 0o600 });
-  const fd = openSync(join(folder, 'requests.jsonl'), 'wx', 0o600);
-  const append = (event: unknown) => { writeSync(fd, JSON.stringify(event) + '\n'); fsyncSync(fd); };
+  const journal = openAppendJournal(folder);
+  const append = (event: Record<string, unknown>) => journal.append(event);
   const id = randomUUID(), deadline = Date.now() + scope.limits.maxDurationMs;
   let used = 0, blocked = 0, stopped: string | null = null, browserStatus: number | null = null;
   let cookieDelivered = false, originMatched = false;
@@ -139,7 +142,7 @@ export async function csrfCheck(folder: string, scope: Scope, config: CsrfCheck,
     const after = await send('state-after', config.stateUrl, 'GET', cookie);
     state.after = after.response.status === 200 && after.fact?.kind === 'string' ? after.fact.sha256 : null;
   } catch (error) { stopped = options.signal?.aborted ? 'cancelled' : error instanceof Error ? error.message : 'execution-failed'; }
-  finally { try { if (browser) await browser.close(); } finally { append({ event: 'finish', requests: used, blocked, stopped }); closeSync(fd); } }
+  finally { try { if (browser) await browser.close(); } finally { append({ event: 'finish', requests: used, blocked, stopped }); journal.close(); } }
   const status = !stopped && state.before === digest(config.beforeValue) && cookieDelivered && originMatched
     && browserStatus !== null && [200, 201, 204].includes(browserStatus) && state.after === digest(config.afterValue)
       ? 'confirmed' : !stopped && browserStatus !== null && state.after === digest(config.beforeValue)
@@ -153,13 +156,22 @@ export async function csrfCheck(folder: string, scope: Scope, config: CsrfCheck,
       'The declared attacker origin must be a real cross-site origin for a CSRF conclusion, and the action must require the authenticated user intent by policy.',
       'Only one simple form POST and one state field were tested. Browser cookie policy, token rotation and other actions may differ.'] };
   writeFileSync(join(folder, 'csrf-check.json'), JSON.stringify({ result, sha256: digest(result) }, null, 2), { flag: 'wx', mode: 0o600 });
-  writeFileSync(join(folder, 'report.md'), `# BBA — cross-origin-form: ${status}\n\nBorrador no enviado.\n\n`
-    + `## Qué es\n\nPosible cambio de estado autenticado iniciado desde \`${attackerOrigin}\` bajo la regla ${config.policyReference}.\n\n`
-    + `## Cómo se encontró\n\nControl anónimo denegado, estado propio inicial y formulario real en Chromium desde otro origen.\n\n`
-    + `## Demostración de explotabilidad\n\nEstado: **${status}**. Cookie entregada por el navegador: ${cookieDelivered}. Origen observado: ${originMatched}. Acción HTTP: ${browserStatus ?? 'sin respuesta'}. Estado inicial/final comparado con hechos declarados. Evidencia: ${result.evidence.map(e => '`' + e + '`').join(', ')}.\n\n`
-    + `## Cómo reproducirlo\n\nCon la cuenta y estado propios, verificar el valor inicial y la denegación anónima, abrir la página atacante declarada, enviar un formulario simple al endpoint autorizado y verificar el valor final. Restaurar el estado.\n\n`
-    + `## Cómo corregirlo\n\nExigir token CSRF ligado a la sesión o validar Origin/Referer según el flujo, y configurar SameSite apropiadamente. Agregar regresión con un origen externo y un formulario sin token.\n\n`
-    + `## Límites\n\n${result.limitations.map(x => '- ' + x).join('\n')}\n`, { flag: 'wx', mode: 0o600 });
+  const md = lang === 'en'
+    ? `# BBA — cross-origin-form: ${status}\n\nLocal draft; not submitted.\n\n`
+      + `## What it is\n\nPotential authenticated state change initiated from \`${attackerOrigin}\` under rule ${config.policyReference}.\n\n`
+      + `## How it was found\n\nDenied anonymous control, initial owned state, and actual Chromium form POST from a foreign origin.\n\n`
+      + `## Exploitability proof\n\nStatus: **${status}**. Browser cookie delivered: ${cookieDelivered}. Observed origin matched: ${originMatched}. HTTP action: ${browserStatus ?? 'no response'}. Evidence: ${result.evidence.map(e => '`' + e + '`').join(', ')}.\n\n`
+      + `## Reproduction\n\nUsing the owned account and state, verify initial value and anonymous denial, open the declared foreign page, submit a simple form to the authorized endpoint, and verify final value. Restore state.\n\n`
+      + `## Remediation\n\nRequire a session-bound CSRF token or validate Origin/Referer, and configure SameSite appropriately.\n\n`
+      + `## Limitations\n\n${result.limitations.map(x => '- ' + x).join('\n')}\n`
+    : `# BBA — cross-origin-form: ${status}\n\nBorrador no enviado.\n\n`
+      + `## Qué es\n\nPosible cambio de estado autenticado iniciado desde \`${attackerOrigin}\` bajo la regla ${config.policyReference}.\n\n`
+      + `## Cómo se encontró\n\nControl anónimo denegado, estado propio inicial y formulario real en Chromium desde otro origen.\n\n`
+      + `## Demostración de explotabilidad\n\nEstado: **${status}**. Cookie entregada por el navegador: ${cookieDelivered}. Origen observado: ${originMatched}. Acción HTTP: ${browserStatus ?? 'sin respuesta'}. Estado inicial/final comparado con hechos declarados. Evidencia: ${result.evidence.map(e => '`' + e + '`').join(', ')}.\n\n`
+      + `## Cómo reproducirlo\n\nCon la cuenta y estado propios, verificar el valor inicial y la denegación anónima, abrir la página atacante declarada, enviar un formulario simple al endpoint autorizado y verificar el valor final. Restaurar el estado.\n\n`
+      + `## Cómo corregirlo\n\nExigir token CSRF ligado a la sesión o validar Origin/Referer según el flujo, y configurar SameSite apropiadamente. Agregar regresión con un origen externo y un formulario sin token.\n\n`
+      + `## Límites\n\n${result.limitations.map(x => '- ' + x).join('\n')}\n`;
+  writeFileSync(join(folder, 'report.md'), md, { flag: 'wx', mode: 0o600 });
   sealArtifact(folder, { kind: 'csrf-check', id, scopeDigest: digest(scope), configDigest: digest(config) });
   return result;
 }
