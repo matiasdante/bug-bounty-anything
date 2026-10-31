@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { readJson } from './session.ts';
 import { digest } from './contracts.ts';
+import { fields, strictUrl } from './scope.ts';
 
 type Parameter = { location: string; name: string };
 type Endpoint = {
@@ -75,7 +76,20 @@ function harEntry(entry: any, ordinal: number, locator: string): Endpoint {
 
 function openapi(doc: any): Endpoint[] {
   record(doc);
-  if (typeof doc.openapi !== 'string' || !/^3\.[01]\.\d+$/.test(doc.openapi)) throw new Error('Only OpenAPI 3.0 and 3.1 JSON are supported');
+  const swagger2 = doc.swagger === '2.0';
+  if (!swagger2 && (typeof doc.openapi !== 'string' || !/^3\.[01]\.\d+$/.test(doc.openapi))) throw new Error('Only Swagger 2.0 and OpenAPI 3.0/3.1 JSON are supported');
+  const swaggerServers = (): { url: string }[] => {
+    if (doc.basePath !== undefined && (typeof doc.basePath !== 'string' || !doc.basePath.startsWith('/'))) throw new Error('Invalid Swagger basePath');
+    const prefix = (doc.basePath ?? '').replace(/\/$/, '');
+    if (prefix) safePath(prefix, true);
+    if (doc.host === undefined) return [{ url: prefix || '/' }];
+    if (typeof doc.host !== 'string' || !/^[A-Za-z0-9.-]+(?::[0-9]{1,5})?$/.test(doc.host)) throw new Error('Invalid Swagger host');
+    const schemes = doc.schemes === undefined ? [] : list(doc.schemes);
+    if (schemes.some(s => s !== 'https' && s !== 'http') || new Set(schemes).size !== schemes.length) throw new Error('Invalid Swagger schemes');
+    if (!schemes.length) return [{ url: prefix || '/' }]; // The spec's retrieval scheme is unknown offline.
+    return schemes.map(scheme => ({ url: `${scheme}://${doc.host}${prefix || '/'}` }));
+  };
+  const defaultServers = swagger2 ? swaggerServers() : null;
   const resolve = (item: any): any => {
     let current = record(item); const seen = new Set();
     while (Object.hasOwn(current, '$ref')) {
@@ -103,18 +117,18 @@ function openapi(doc: any): Endpoint[] {
     for (const method of methods) {
       const key = method.toLowerCase(); if (!Object.hasOwn(item, key)) continue;
       const operation = record(item[key]);
-      const servers = operation.servers ?? item.servers ?? doc.servers ?? [{ url: '/' }];
+      const servers = swagger2 ? defaultServers : operation.servers ?? item.servers ?? doc.servers ?? [{ url: '/' }];
       if (!list(servers).length) throw new Error('Empty OpenAPI server list is unsupported');
       const parameters = new Map<string, Parameter>();
       for (const rawParam of [...list(item.parameters ?? []), ...list(operation.parameters ?? [])]) {
         const p = resolve(rawParam);
-        if (!['query', 'path', 'header', 'cookie'].includes(p.in)) throw new Error('Invalid parameter location');
+        if (!(swagger2 ? ['query', 'path', 'header', 'body', 'formData'] : ['query', 'path', 'header', 'cookie']).includes(p.in)) throw new Error('Invalid parameter location');
         const param = { location: p.in, name: name(p.name) }; parameters.set(param.location + ':' + param.name, param);
       }
       const security = operation.security ?? doc.security;
       if (security !== undefined) list(security).forEach(record);
       const authentication = security === undefined ? 'not-established'
-        : security.length === 0 || security.some(s => Object.keys(s).length === 0) ? 'declared-optional' : 'declared-required';
+        : security.length === 0 || security.some((s: Record<string, unknown>) => Object.keys(s).length === 0) ? 'declared-optional' : 'declared-required';
       for (const server of servers) {
         const serverUrl = record(server).url;
         if (typeof serverUrl !== 'string') throw new Error('Invalid OpenAPI server');
@@ -151,7 +165,7 @@ export function importSurface(input: unknown, format: Surface['format']): Surfac
   } else if (format === 'openapi') {
     entries = openapi(doc);
     limitations.push('Declared operations are not observed execution. Relative servers have unknown origin.',
-      'JSON subset only: path/operation servers, parameters and security declarations. No schema validation, YAML, external refs, server variables, callbacks or body-property inventory.');
+      'JSON subset only: Swagger 2.0 host/basePath/schemes or OpenAPI 3.x servers, parameters and security declarations. No schema validation, YAML, external refs, server variables, callbacks or body-property inventory.');
   } else if (format === 'rea') {
     if (doc.operation !== 'inspect_web_network_capture' || typeof doc.evidence_id !== 'string'
       || !/^[A-Za-z0-9:_.-]{1,200}$/.test(doc.evidence_id)) throw new Error('Expected complete REA capture Evidence');
@@ -181,4 +195,33 @@ export function surfaceSummary(surface: Surface) {
   return { format: surface.format, records: surface.entries.length, endpointCandidates: identities.size,
     observed: surface.entries.filter(e => e.basis === 'observed').length,
     declared: surface.entries.filter(e => e.basis === 'declared').length, reaEvidenceId: surface.reaEvidenceId };
+}
+
+export function validateSurfaceBundle(value: unknown): asserts value is { surface: Surface; sha256: string } {
+  fields(value, ['surface', 'sha256']);
+  const s = value.surface;
+  fields(s, ['schemaVersion', 'toolVersion', 'sourceDigest', 'format', 'reaEvidenceId', 'entries', 'limitations']);
+  if (s.schemaVersion !== 1 || s.toolVersion !== '0.3.0' || !['har', 'openapi', 'rea'].includes(s.format)
+    || typeof s.sourceDigest !== 'string' || !/^[a-f0-9]{64}$/.test(s.sourceDigest)
+    || (s.reaEvidenceId !== null && (typeof s.reaEvidenceId !== 'string' || !/^[A-Za-z0-9:_.-]{1,200}$/.test(s.reaEvidenceId)))
+    || !Array.isArray(s.entries) || s.entries.length > 5000 || !Array.isArray(s.limitations)
+    || s.limitations.some((x: unknown) => typeof x !== 'string' || x.length > 2000) || value.sha256 !== digest(s)) throw new Error('Invalid surface bundle');
+  for (const e of s.entries) {
+    fields(e, ['id', 'method', 'origin', 'path', 'pathKind', 'basis', 'parameters', 'authentication', 'status', 'locator', 'ordinal']);
+    if (!methods.includes(e.method) || !['literal', 'inferred-template', 'declared-template'].includes(e.pathKind)
+      || !['observed', 'declared'].includes(e.basis) || !['credential-present', 'not-established', 'declared-required', 'declared-optional'].includes(e.authentication)
+      || typeof e.path !== 'string' || typeof e.locator !== 'string' || e.locator.length > 2048
+      || (e.status !== null && (!Number.isInteger(e.status) || e.status < 0 || e.status > 599))
+      || (e.ordinal !== null && (!Number.isSafeInteger(e.ordinal) || e.ordinal < 0))
+      || !Array.isArray(e.parameters) || e.parameters.length > 100) throw new Error('Invalid surface entry');
+    if (e.origin !== null && (typeof e.origin !== 'string' || strictUrl(e.origin + '/').origin !== e.origin)) throw new Error('Invalid surface origin');
+    safePath(e.path, true);
+    if (e.pathKind === 'literal' && e.path.includes('{')) throw new Error('Invalid literal surface path');
+    for (const p of e.parameters) {
+      fields(p, ['location', 'name']); name(p.name);
+      if (!['query', 'header', 'path', 'cookie', 'body', 'formData'].includes(p.location)) throw new Error('Invalid parameter location');
+    }
+    const { id, ...entry } = e;
+    if (id !== 'sha256:' + digest(entry)) throw new Error('Surface entry integrity mismatch');
+  }
 }

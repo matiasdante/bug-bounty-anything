@@ -63,9 +63,9 @@ async function files(dir: string): Promise<string[]> {
 // ---- the frozen set ---------------------------------------------------------------------------
 const cases: Case[] = [
   ...checkClasses.flatMap((kind): Case[] => [
-    { id: `detection/${kind}-vulnerable`, group: 'detection', expected: 'confirmed', run: async () => {
+    { id: `detection/${kind}-vulnerable`, group: 'detection', expected: 'needs-validation', run: async () => {
       const e = await runLabCase(kind, 'vulnerable'); return { actual: e.findings[0].status, requests: 3 }; } },
-    { id: `detection/${kind}-fixed`, group: 'detection', expected: 'not-reproduced', run: async () => {
+    { id: `detection/${kind}-fixed`, group: 'detection', expected: kind === 'property-exposure' ? 'unresolved' : 'not-reproduced', run: async () => {
       const e = await runLabCase(kind, 'fixed'); return { actual: e.findings[0].status, requests: 3 }; } },
     { id: `inconclusive/${kind}-budget-exhausted`, group: 'inconclusive', expected: 'unresolved', run: async () => {
       const e = await runLabCase(kind, 'vulnerable', 2); return { actual: e.findings[0].status, requests: 2 }; } },
@@ -174,7 +174,9 @@ async function occurrences(dir: string, secrets: string[]): Promise<number> {
 }
 
 // Changing an id, group or expectation changes this digest on purpose: the set is frozen.
-export const FROZEN_DIGEST = '5fe8851acc61bd531e88ce39a49130323d1d03e917db5df1cb3fa61b8e9eeb9c';
+// Revision 2: hash-only comparisons are leads, never confirmed findings.
+// Previous manifest: 5fe8851acc61bd531e88ce39a49130323d1d03e917db5df1cb3fa61b8e9eeb9c.
+export const FROZEN_DIGEST = 'fd3ee6c9fa3c9835ad7a197683ac0d74501e4ecf3ace48f390e6cc6031c98c64';
 export const frozenManifest = () => digest(cases.map(({ id, group, expected }) => ({ id, group, expected })));
 
 export async function runEvaluation(): Promise<Report> {
@@ -204,7 +206,7 @@ export async function runEvaluation(): Promise<Report> {
     },
     limitations: [
       'Metrics come from BBA\'s own labs: three authorization classes, two variants, synthetic data and loopback only. They do not estimate detection rates, false positives or coverage on any real system.',
-      'The frozen set checks that known flaws are confirmed, fixed variants are not, and budget, scope, redirect, secret and resume rules hold. A passing run is not evidence that a target is safe.',
+      'Revision 2 checks that hash-only matches remain needs-validation, partial property differences remain unresolved, and budget, scope, redirect, secret and resume rules hold. These cases do not establish confirmed vulnerabilities. Autonomous hunt has separate tests.',
       'Browser capture isolation is covered by the capture tests, not by this set, because it needs a Chromium install.',
     ],
   };

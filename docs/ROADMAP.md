@@ -1,18 +1,22 @@
-# Roadmap interno — BBA 1.0.0
+# Roadmap interno — BBA
 
-Actualizado: 2026-10-29. La release actual es **1.0.0**. Este documento conserva el alcance acordado y distingue implementación de planificación; no declara lista la 1.0.0.
+Actualizado: 2026-10-30. La versión **1.9.0** incorpora cinco comprobadores acotados y una copia de política ligada por digest. La cobertura automática sigue limitada a sus contratos; no se equipara número de versión con cobertura universal ni se promete hallar una vulnerabilidad crítica en cualquier vínculo.
 
 Objetivo: investigación reproducible de web/API, con skill, CLI/MCP, motor local, adaptadores, evidencia persistente, evaluación controlada y piloto sobre un programa con bug bounty. Distinguir detección automatizada, investigación asistida e indicios por capacidad. No prometer cobertura universal ni exigir un hallazgo productivo para declarar honesto el resultado.
 
 | Bloque | Estado | Entregable y criterio de salida |
 |---|---|---|
 | 1. Contratos y laboratorio | Implementado en 0.1.0 | Contratos runtime, laboratorio reiniciable con dos cuentas, variantes vulnerable/corregida, controles independientes, evidencia y reporte. Ambas variantes deben producir sus resultados esperados con HTTP real. |
-| 2. Núcleo y ejecución | Implementado en 0.2.0 para planes GET | Scope exacto/exclusiones/vigencia, presupuesto compartido por investigación, checkpoints SQLite, cancelación y recuperación sin repetir intentos inciertos. Pruebas negativas y caída real de proceso. Límites y semántica en [EXECUTION.md](EXECUTION.md). |
-| 3. Captura y superficie | Implementado en 0.5.0: importación offline HAR/OpenAPI/REA, captura con navegador (Bearer o Cookie) con aislamiento; captura pública sin probar contra un host real | HAR/OpenAPI, navegación autenticada, inventario con procedencia y REA. Importar no debe contactar URLs; separar observaciones e inferencias. |
-| 4. Investigación y confirmación | Implementado en 0.6.0 para BOLA, BFLA y exposición de propiedades en laboratorio propio | Ampliar controles baseline/probe, roles y clases. Cada capacidad declarada debe distinguir sus casos vulnerables, corregidos e inconclusos. |
+| 2. Núcleo y ejecución | Ampliado en 1.2.0: métodos HTTP, query/body por entorno, bindings de inputs y presupuesto durable entre fases | Scope exacto/exclusiones/vigencia, checkpoints SQLite, cancelación y recuperación sin repetir intentos inciertos. Límites en [EXECUTION.md](EXECUTION.md). |
+| 3. Captura y superficie | HAR/Swagger 2.0/OpenAPI 3.x/REA offline, captura aislada y planificación con procedencia; piloto público DCS repetido en 1.2.0 | Captura pública limitada a rutas GET elegidas; assets fuera de scope bloqueados. No equivale a ejecutar toda la aplicación. |
+| 4. Investigación y confirmación | 1.3.0: BOLA, BFLA, propiedad y tenant con hechos; XSS/CORS con navegador real; integridad JWT con token firmado propio; escenarios de sesión declarados; `hunt` especializado | [Investigación](INVESTIGATION.md), [browser proofs](BROWSER-CHECKS.md), [JWT](JWT-INTEGRITY.md) y [escenarios](SCENARIOS.md). Faltan inferencia de flujos, tokens dinámicos y confirmadores de otras clases. |
+| 4a. Caso publicado reproducible | 1.4.0: caso Titan, bundle validado, grafo de procedencia, selección de una hipótesis, prueba JWT y reporte local | [Estudio publicado](PUBLISHED-CASE-STUDIES.md). Faltan otras clases y validación externa con autorización. |
+| 4b. Descubrimiento de página | 1.5.0: `inspect_web_page` usa captura aislada y proyecta links, formularios y scripts sin valores ni query strings | La captura conserva `pages.json` con checksum; `page_view` lo lee offline. Las rutas observadas no amplían el scope. |
+| 4c. Expediente y ejecución guiada | 1.6.0: ledger de campaña con alcance/política/evidencia enlazados; `campaign_capture` y `campaign_execute` usan la autorización declarada y el presupuesto compartido | Un intento por captura/perfil, bloqueo de acciones interrumpidas, informe de cobertura y borrador. La veracidad de la política y las reglas de negocio sigue a cargo del operador. |
+| 4d. Pruebas acotadas de otras clases | 1.9.0: plantilla aritmética, callback propio, exposición entre identidades correlacionada con cache, carrera de uso único y formulario de otro origen | Controles negativos, rutas exactas, presupuesto compartido, evidencia y reporte de cinco secciones. Requieren cuentas/recursos propios y reglas explícitas; no son detectores genéricos de cada familia. |
 | 5. Adaptadores | Implementado en 0.7.0 solo por importación (ZAP, Nuclei, Subfinder); BBA no ejecuta scanners ni consulta advisories | ZAP, Nuclei revisado/versionado y Subfinder; advisories y deltas. Normalizar resultados, respetar presupuestos y validar candidatos antes de confirmar. |
-| 6. Producto utilizable | Implementado en 0.8.0: CLI, recuperación, exportación, MCP por stdio, `doctor` y paquete instalable | Instalación comprobada desde el tarball; el MCP expone herramientas de red solo con `--allow-network`. |
-| 7. RC y piloto productivo | Implementado en 1.0.0: evaluación congelada (18 casos) y piloto sobre www.dcs.ar (ver abajo) | Evaluación congelada, selección de programa, recorrido acotado, revisión de resultados y correcciones. |
+| 6. Producto utilizable | CLI/MCP, capacidades, vistas/comparación de evidencia, `doctor`, instalación/actualización con backup y TypeScript estricto | `npm run verify` combina check/tests/build. MCP expone red solo con `--allow-network`; no hay proveedor CI configurado. |
+| 7. RC y piloto productivo | Suite local completa, chequeo TypeScript estricto, doctor, validación de skill y piloto de navegación pública en DCS | Falta validación con cuentas controladas en un servicio real y un programa externo de bounty. Un sitio público sin hallazgos no valida todas las clases. |
 
 ## Decisiones de implementación
 
@@ -57,3 +61,65 @@ Lo que el piloto mostró de la herramienta: BBA no conserva el destino de un red
 ## Selección de un programa de terceros — más adelante
 
 Relevar programas con recompensa vigente, scope claro, cuentas de prueba accesibles y reglas compatibles. Elegir un programa y una superficie acotada; registrar presupuesto y condiciones de parada antes de probar. El envío de un reporte requiere autorización explícita del usuario.
+
+## Verificación y piloto 1.2.0 — 2026-10-29
+
+`npm run verify`: TypeScript estricto, 159 pruebas aprobadas sin omisiones y build de 36 módulos JS. `doctor` comprobó Node 26.12.0, SQLite, loopback y Chromium 156.0.8078.4. El validador de skill pasó con PyYAML 6.0.3 instalado solo en una carpeta local de verificación. npm audit informó cero vulnerabilidades conocidas para el inventario instalado durante la actualización de dependencias de desarrollo.
+
+La evaluación independiente offline no trató una captura autenticada histórica como identidad vigente ni copió sus secretos al informe. Se corrigieron las contradicciones detectadas en la ayuda CLI y se agregó `start-case` para registrar un caso sin fabricar ventana de permiso. Su comprobación posterior validó esa entrada y la ayuda corregida.
+
+El usuario eligió `https://www.dcs.ar` para el piloto. Se limitaron las operaciones del motor a navegación pública: GET a `/`, `/servicios/` y `/contacto/`, todos HTTP 200, y una captura de inicio. **4 GET enviados, 67 recursos bloqueados por scope, 0 fugas detectadas por el sumidero y 0 reservas inciertas**, compartiendo contador/intervalo/duración. Los artefactos locales están en `runs/pilot-dcs-20261029-v12/`, fuera de Git. Las consultas públicas con la herramienta web se registraron aparte del contador del motor.
+
+No se probaron formularios, credenciales, permisos ni payloads en producción. No hay vulnerabilidades confirmadas en este piloto y no se deduce que el sitio sea seguro. No se estableció un programa público de bounty; la herramienta web no obtuvo security.txt, lo que tampoco prueba ausencia del archivo. Para comprobar fronteras de aplicación reales hacen falta recursos/cuentas controlados, sus reglas y condiciones específicas.
+
+## Bloque JWT 1.3.0
+
+El [caso Titan](https://blog.faav.net/how-i-couldve-accessed-17-trillion-microsoft-records) motivó una distinción entre indicios de validación (errores de tenant/audiencia/aplicación), aceptación de un JWT cuya firma ya no corresponde al payload, y alcance sobre otros datos. BBA automatiza **solo** la segunda comprobación sobre una cuenta propia y un hecho protegido inocuo. Un Swagger importado o una configuración archivada aportan candidatos con procedencia; no acreditan permiso ni prueban que una ruta siga activa. La estimación de filas del artículo fue calculada desde metadatos, no es una prueba que BBA deba repetir sobre un tercero.
+
+`jwt-check` usa la misma ejecución y presupuesto durables, liga el token original y su mutación mediante hashes salados para retomar sin cambiar identidad o valor, y no guarda JWTs ni cuerpos. El importador ahora proyecta Swagger 2.0 JSON, incluida la indicación de seguridad por operación, sin ejecutar sus rutas. Quedan sin automatizar la exploración genérica de JWT/OIDC, la inferencia de claims válidos, claves/JWKS, la progresión semántica de mensajes de error y la atribución de roles o datos más allá de la cuenta propia. El piloto DCS público no incluye JWT ni autorización para probarlo allí.
+
+Verificación 1.3.0: `npm run verify` aprobó **165 pruebas sin omisiones**, TypeScript estricto y build de 37 módulos. Se comprobaron variantes JWT vulnerable/corregida, rechazo previo a la red, reanudación ligada a token y mutación, importación Swagger 2.0, inventario MCP y paquete con la guía JWT. El validador de la skill pasó para fuente e instalación. No hubo pruebas JWT sobre servicios externos.
+
+## Bloque de estudios publicados 1.4.0
+
+Se agregó el manifiesto del artículo Titan y un [recorrido local](PUBLISHED-CASE-STUDIES.md): la política declarada, la superficie Swagger/OpenAPI importada, las rutas históricas y el perfil de cuenta propia forman un bundle validado. `study-plan` genera candidatos y un grafo de procedencia; solo el candidato único dentro de scope produce una configuración ejecutable. `study-run` reutiliza el control JWT de cuatro requests y el presupuesto duradero; genera un borrador que responde qué es, cómo se encontró, cómo se demostró, cómo reproducirlo y cómo corregirlo. La variante corregida queda `not-reproduced`; candidatos múltiples o excluidos quedan offline.
+
+Este bloque no descubre por sí solo una falla crítica en cualquier enlace ni acredita el impacto del caso original. Para llevar el método a otros casos hacen falta detectores, pruebas de impacto acotadas y evaluaciones independientes por clase. Los siguientes corpus previstos son Kia (fronteras de rol), carreras y cache; sus comprobadores no forman parte de 1.4.0. Tampoco se hicieron pruebas activas sobre los servicios del artículo.
+
+Verificación 1.4.0: `npm run verify` aprobó **170 pruebas sin omisiones**, TypeScript estricto y build de 38 módulos. Incluye laboratorio vulnerable/corregido, ambigüedad y exclusiones sin tráfico, reanudación ligada al bundle, recorrido completo por CLI e inventario MCP. El paquete incluye el manifiesto, el módulo compilado y la guía; el validador de skill pasó para fuente e instalación personal.
+
+## Comparación con REA y bloque MCP 1.5.0
+
+[REA](https://github.com/morluto/rea) registra su MCP con el agente y organiza muchas familias de herramientas de análisis por artefacto, runtime y evidencia. BBA ya tenía MCP para sus confirmadores, pero la instalación de la skill dejaba el servidor sin conectar y la captura web no entregaba estructura del DOM. `setup-mcp` usa la CLI oficial de Codex para registrar o reemplazar el servidor con vista previa, backup, verificación y herramientas offline por defecto. `inspect_web_page` reduce el paso manual entre una URL autorizada y las primeras rutas/formularios observados; `page_view` recupera esa evidencia sin repetir tráfico.
+
+La brecha restante es funcional, no una cuenta de nombres MCP: BBA todavía requiere una política verificada y reglas de negocio aportadas por el operador, no infiere automáticamente identidad/propiedad ni cubre inyección, SSRF, CSRF, carreras o cache. Un próximo bloque debe tomar una clase y un recorrido completo con controles negativos, presupuesto común y reporte antes de sumar otra familia. La conexión MCP por sí sola no aumenta cobertura de vulnerabilidades.
+
+Verificación 1.5.0: `npm run verify` aprobó **172 pruebas sin omisiones**, TypeScript estricto y build de 39 módulos. El registro MCP se probó con un `CODEX_HOME` aislado, incluyendo vista previa, backup, idempotencia, conflicto y reemplazo explícito de modo; la instalación local quedó registrada en modo offline. La captura DOM se probó contra un servidor sintético con valores secretos en query y campos; esos valores no aparecen en los artefactos y no se enviaron requests fuera del scope.
+
+## Expediente de campaña 1.6.0
+
+La [guía de campaña](CAMPAIGNS.md) une las fases bajo un identificador, una cadena de eventos y el presupuesto durable del scope. `campaign_status` vuelve a leer los artefactos y detecta cambios. `campaign_capture` exige el scope y la revisión de política declarada antes de un GET acotado, enlaza hechos DOM y superficie; `campaign_execute` exige una superficie y perfil actual con checks semánticos, ejecuta los controles y enlaza el borrador. Cada acción reserva su carpeta antes de hacer requests para que una caída no provoque una repetición silenciosa. Los tests de laboratorio comprueban el bloqueo sin política, la ejecución con dos identidades, el presupuesto y la ausencia de requests en un segundo intento.
+
+Esto coordina las capacidades actuales; no convierte a BBA en un detector genérico de vulnerabilidades críticas. La automatización todavía depende de reglas de negocio y cuentas controladas, y no cubre las familias de inyección, SSRF, CSRF, cache o carreras. El operador debe validar la política vigente y revisar la demostración y el impacto antes de reportar. No hubo pruebas activas de 1.6.0 sobre un servicio externo.
+
+Verificación 1.6.0: `npm run verify` aprobó **175 pruebas sin omisiones**, TypeScript estricto y build de 40 módulos. Los fixtures incluyen un flujo completo de campaña con dos cuentas sintéticas, una captura Chromium contra loopback, denegación previa a la red sin revisión de política y bloqueo de un segundo intento. La suite limita la concurrencia a dos archivos para estabilizar pruebas de navegador y ventanas temporales cortas; las dos pruebas que fallaron en una corrida paralela pasaron aisladas y luego dentro de la suite completa.
+
+## Reanudación de campaña 1.7.0
+
+`campaign_resume` recupera un run pausado usando el checkpoint persistente, el mismo scope y el perfil/superficie actuales. Rechaza definiciones cambiadas, ventanas vencidas y reservas inciertas; enlaza un run terminal con su reporte sin enviar solicitudes adicionales. La prueba local cancela una campaña antes del primer request, comprueba `interrupted-action`, reanuda cinco pasos pendientes y bloquea una segunda reanudación. El CLI propaga SIGINT mediante `AbortSignal` a captura, ejecución y reanudación de campaña. La captura Chromium sigue sin reanudación automática y necesita inspección manual si se interrumpe.
+
+Verificación 1.7.0: `npm run verify` aprobó **176 pruebas sin omisiones**, TypeScript estricto y build de 40 módulos. Todos los requests de la prueba nueva se enviaron al servidor loopback descartable.
+
+## Reporte semántico 1.8.0
+
+Cada hallazgo del evaluador semántico ahora responde en secciones separadas qué es, cómo se encontró, cuál es la demostración de explotabilidad, cómo reproducirla y cómo corregirla. La demostración cita IDs de evidencia y conserva el estado `confirmed`, `not-reproduced` o `unresolved`; solo `confirmed` describe la lectura protegida observada, sin extrapolar alcance o severidad. La guía de cobertura sigue en `coverage.json` y el borrador requiere revisión del programa antes de enviarse.
+
+Verificación 1.8.0: `npm run verify` aprobó **176 pruebas sin omisiones**, TypeScript estricto y build de 40 módulos. Las pruebas semánticas de las cuatro clases comprueban ahora las cinco secciones del reporte.
+
+## Comprobadores y política vinculada 1.9.0
+
+Se agregaron recorridos concretos de evaluación aritmética en una entrada literal, solicitud saliente a un callback propio, exposición de un campo privado entre dos cuentas correlacionada con una URL compartida, doble uso concurrente de un recurso descartable y cambio de estado propio mediante formulario de otro origen. Todos verifican precondiciones, usan rutas y métodos exactos y producen evidencia y un borrador con qué es, cómo se encontró, demostración, reproducción y corrección. La carrera y el formulario son acciones de una sola vez: una interrupción requiere revisar el journal antes de volver a probar. Ver [entrada y SSRF](INPUT-PROOFS.md), [cache](CACHE-CHECK.md), [carrera](RACE-CHECK.md) y [CSRF](CSRF-CHECK.md).
+
+`campaign_policy_review` liga por SHA-256 una copia local `policy-source.txt` a la decisión documentada y `campaign_status` detecta alteraciones. La fuente y su vigencia siguen requiriendo comprobación humana: el digest no prueba autorización del dueño. También hacen falta reglas de negocio y cuentas o recursos controlados para evaluar acceso e impacto. Continúan pendientes confirmadores genéricos de SQL/NoSQL/comandos, destinos internos SSRF, variantes CSRF con otros tipos de solicitud, atribución causal de cache y carreras en flujos distintos. No hay paridad funcional con REA ni capacidad de garantizar una falla crítica para cualquier web o app; REA además resuelve otro problema, el análisis de artefactos y runtimes. La evidencia de laboratorio no se extrapola a un servicio externo.
+
+Verificación 1.9.0: `npm run verify` aprobó **194 pruebas sin omisiones**, TypeScript estricto y build de 45 módulos. Incluye variantes vulnerables/corregidas de los cinco recorridos, rechazos antes de enviar tráfico fuera de scope, integridad de la copia de política también mediante MCP y retención de dos reservas inciertas para una pareja concurrente. Solo se usaron servidores loopback sintéticos para estos recorridos.

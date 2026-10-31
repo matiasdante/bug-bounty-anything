@@ -1,6 +1,6 @@
 {
   "name": "bug-bounty-anything",
-  "version": "1.0.0",
+  "version": "1.9.0",
   "private": true,
   "type": "module",
   "description": "Local, evidence-backed vulnerability investigation lab",
@@ -11,8 +11,10 @@
     "bba": "node src/cli.ts",
     "demo:core": "node src/demo-core.ts",
     "build": "node scripts/build.ts",
+    "check": "tsc --project tsconfig.json",
+    "verify": "npm run check && npm run build && npm test",
     "prepack": "npm run build",
-    "test": "node --test test/*.test.ts"
+    "test": "node --test --test-concurrency=2 test/*.test.ts"
   },
   "bin": {
     "bba": "dist/cli.js"
@@ -22,9 +24,15 @@
     "README.md",
     "SKILL.md",
     "docs",
-    "references"
+    "references",
+    "agents",
+    "cases"
   ],
   "dependencies": {
     "playwright-core": "1.64.1"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "typescript": "7.0.2"
   }
 }

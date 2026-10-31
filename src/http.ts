@@ -4,6 +4,9 @@ import { request as httpsRequest } from 'node:https';
 import { isIP } from 'node:net';
 import { assertAuthorized, validateScope } from './scope.ts';
 import type { Scope } from './scope.ts';
+import { identifyingHeaders } from './headers.ts';
+import { resolveRequest } from './requests.ts';
+import type { RequestSpec } from './scope.ts';
 
 export class RequestFailure extends Error {
   code: string;
@@ -53,14 +56,31 @@ export function credentialFor(envName: string, value: string): { token?: string;
   return { token: value };
 }
 
-export type HttpResult = { status: number; body: Buffer; contentType: string };
+export type HttpResult = { status: number; body: Buffer; contentType: string; browserHeaders?: Record<string, string>; setCookies?: string[]; location?: string };
+const browserResponseHeaders = ['content-security-policy', 'content-security-policy-report-only', 'x-content-type-options',
+  'x-frame-options', 'cross-origin-opener-policy', 'cross-origin-embedder-policy', 'cross-origin-resource-policy',
+  'access-control-allow-origin', 'access-control-allow-credentials', 'access-control-allow-methods',
+  'access-control-allow-headers', 'access-control-expose-headers', 'vary'];
 
 export async function scopedRequest(scope: Scope, urlText: string, options: {
-  token?: string; cookie?: string; signal?: AbortSignal; remainingMs?: number;
+  token?: string; cookie?: string; signal?: AbortSignal; remainingMs?: number; environment?: Record<string, string | undefined>;
+  request?: RequestSpec;
+  browserOrigin?: string;
+  browserCredentials?: boolean;
 } = {}): Promise<HttpResult> {
   validateScope(scope);
   const url = assertAuthorized(scope, urlText);
-  if (options.token !== undefined && options.cookie !== undefined) throw new RequestFailure('invalid-credential');
+  let resolved: ReturnType<typeof resolveRequest>;
+  try { resolved = resolveRequest(scope, urlText, options.request, options.environment); }
+  catch { throw new RequestFailure('invalid-request-input'); }
+  let headers: Record<string, string>;
+  try { headers = identifyingHeaders(scope, url.origin, options.environment); }
+  catch { throw new RequestFailure('invalid-identifying-header'); }
+  if (options.browserOrigin !== undefined) {
+    if (!scope.allowed.some(r => r.origin === options.browserOrigin)) throw new RequestFailure('invalid-request-input');
+    headers.Origin = options.browserOrigin;
+  }
+  if (options.token !== undefined && options.cookie !== undefined && options.browserCredentials !== true) throw new RequestFailure('invalid-credential');
   if (options.token !== undefined && !/^[A-Za-z0-9._~+/-]{1,4096}={0,2}$/.test(options.token)) throw new RequestFailure('invalid-credential');
   if (options.cookie !== undefined) try { credentialFor('BBA_COOKIE_X', options.cookie); } catch { throw new RequestFailure('invalid-credential'); }
   const timeout = Math.min(scope.limits.timeoutMs, options.remainingMs ?? Infinity,
@@ -82,19 +102,19 @@ export async function scopedRequest(scope: Scope, urlText: string, options: {
     assertAuthorized(scope, urlText); // Revalidate after DNS resolution.
     return await new Promise<HttpResult>((resolve, reject) => {
       const send = url.protocol === 'https:' ? httpsRequest : httpRequest;
-      const req = send(url, {
-        method: 'GET', agent: false, signal,
+      const req = send(resolved.url, {
+        method: resolved.method, agent: false, signal,
         // Pin the validated resolution; the original hostname still controls
         // TLS certificate verification and SNI. Environment proxies are unused.
         lookup: (_host, _options, callback) => {
           if (_options.all) callback(null, [target]);
           else callback(null, target.address, target.family);
         },
-        headers: options.cookie ? { Cookie: options.cookie } : options.token ? { Authorization: `Bearer ${options.token}` } : {},
+        headers: { ...headers, ...(resolved.body ? { 'Content-Type': resolved.contentType!, 'Content-Length': String(resolved.body.length) } : {}), ...(options.cookie ? { Cookie: options.cookie } : {}), ...(options.token ? { Authorization: `Bearer ${options.token}` } : {}) },
       }, res => {
         const status = res.statusCode ?? 0;
         if ((status >= 300 && status < 400) || status === 429 || status >= 500) {
-          resolve({ status, body: Buffer.alloc(0), contentType: '' }); res.destroy(); return;
+          resolve({ status, body: Buffer.alloc(0), contentType: '', location: res.headers.location, setCookies: res.headers['set-cookie'] }); res.destroy(); return;
         }
         let size = 0;
         const chunks: Buffer[] = [];
@@ -106,10 +126,11 @@ export async function scopedRequest(scope: Scope, urlText: string, options: {
           chunks.push(chunk);
         });
         res.on('error', () => reject(signal.aborted ? aborted() : new RequestFailure('incomplete-response')));
-        res.on('end', () => resolve({ status, body: Buffer.concat(chunks), contentType: res.headers['content-type'] ?? '' }));
+        res.on('end', () => resolve({ status, body: Buffer.concat(chunks), contentType: res.headers['content-type'] ?? '', setCookies: res.headers['set-cookie'],
+          browserHeaders: Object.fromEntries(browserResponseHeaders.flatMap(name => typeof res.headers[name] === 'string' ? [[name, res.headers[name] as string]] : [])) }));
       });
       req.on('error', () => reject(signal.aborted ? aborted() : new RequestFailure('network-error')));
-      req.end();
+      req.end(resolved.body);
     });
   } catch (error) {
     if (error instanceof RequestFailure) throw error;

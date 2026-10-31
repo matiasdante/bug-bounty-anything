@@ -255,11 +255,11 @@ test('scope expiration after pausing is rechecked before any network call', asyn
   let hits = 0;
   await local((_req, res) => { hits++; res.end(); }, async (origin, folder) => {
     const { scope, plan } = fixture(origin);
-    scope.authorization.validUntil = new Date(Date.now() + 100).toISOString();
+    scope.authorization.validUntil = new Date(Date.now() + 1000).toISOString();
     createSession(folder, scope, plan);
     const controller = new AbortController(); controller.abort();
     await executeSession(folder, scope, { signal: controller.signal });
-    await delay(120);
+    await delay(1100);
     await assert.rejects(executeSession(folder, scope), /Authorization expired/);
     assert.equal(hits, 0);
   });

@@ -1,12 +1,22 @@
+import { validateProjections } from './observations.ts';
+import type { Projection } from './observations.ts';
+
+export const methods = ['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE'] as const;
+export type Method = typeof methods[number];
+export type RequestSpec = { method: Method; query?: { name: string; valueEnv: string }[];
+  body?: { format: 'json' | 'form' | 'text'; valueEnv: string } };
 export type Scope = {
   schemaVersion: 1;
   mode: 'loopback-lab' | 'public-https';
   authorization: { reference: string; validFrom: string; validUntil: string };
   allowed: { origin: string; paths: string[] }[];
   excluded: { origin: string; paths: string[] }[];
+  requestHeaders?: { origin: string; name: string; valueEnv: string }[];
+  requestRules?: { origin: string; path: string; method: Method; queryNames: string[]; bodyFormats: ('json' | 'form' | 'text')[] }[];
+  budgetId?: string;
   limits: { maxRequests: number; minIntervalMs: number; timeoutMs: number; maxResponseBytes: number; maxDurationMs: number };
 };
-export type Step = { id: string; method: 'GET'; url: string; credentialEnv: string | null };
+export type Step = RequestSpec & { id: string; url: string; credentialEnv: string | null; observe?: Projection[] };
 export type Plan = { schemaVersion: 1; steps: Step[] };
 
 export function fields(value: unknown, keys: string[]): asserts value is Record<string, any> {
@@ -15,6 +25,10 @@ export function fields(value: unknown, keys: string[]): asserts value is Record<
 }
 export function integer(value: unknown, min: number, max: number): asserts value is number {
   if (!Number.isSafeInteger(value) || Number(value) < min || Number(value) > max) throw new Error('Invalid limit');
+}
+export function optionalFields(value: unknown, required: string[], optional: string[]): asserts value is Record<string, any> {
+  const present = value && typeof value === 'object' ? optional.filter(k => Object.hasOwn(value, k)) : [];
+  fields(value, [...required, ...present]);
 }
 export function isoDate(value: unknown): asserts value is string {
   if (typeof value !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(value)
@@ -33,7 +47,8 @@ export function strictUrl(value: unknown): URL {
 }
 
 export function validateScope(value: unknown): asserts value is Scope {
-  fields(value, ['schemaVersion', 'mode', 'authorization', 'allowed', 'excluded', 'limits']);
+  optionalFields(value, ['schemaVersion', 'mode', 'authorization', 'allowed', 'excluded', 'limits'], ['requestHeaders', 'requestRules', 'budgetId']);
+  if (value.budgetId !== undefined && (typeof value.budgetId !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(value.budgetId))) throw new Error('Invalid shared budget ID');
   if (value.schemaVersion !== 1 || !['loopback-lab', 'public-https'].includes(value.mode)) throw new Error('Unsupported scope');
   fields(value.authorization, ['reference', 'validFrom', 'validUntil']);
   const auth = value.authorization;
@@ -60,6 +75,35 @@ export function validateScope(value: unknown): asserts value is Scope {
       }
     }
   }
+  if (value.requestHeaders !== undefined) {
+    if (!Array.isArray(value.requestHeaders) || value.requestHeaders.length > 20) throw new Error('Invalid request headers');
+    const seen = new Set<string>();
+    for (const header of value.requestHeaders) {
+      fields(header, ['origin', 'name', 'valueEnv']);
+      if (!value.allowed.some((rule: Scope['allowed'][number]) => rule.origin === header.origin)
+        || typeof header.name !== 'string' || !/^(user-agent|x-[a-z0-9-]{1,60})$/.test(header.name)
+        || typeof header.valueEnv !== 'string' || !/^BBA_HEADER_[A-Z0-9_]{1,50}$/.test(header.valueEnv)) throw new Error('Invalid identifying header');
+      const key = header.origin + ':' + header.name;
+      if (seen.has(key)) throw new Error('Duplicate identifying header');
+      seen.add(key);
+    }
+  }
+  if (value.requestRules !== undefined) {
+    if (!Array.isArray(value.requestRules) || value.requestRules.length > 100) throw new Error('Invalid request rules');
+    const seen = new Set<string>();
+    for (const rule of value.requestRules) {
+      fields(rule, ['origin', 'path', 'method', 'queryNames', 'bodyFormats']);
+      if (typeof rule.origin !== 'string' || typeof rule.path !== 'string' || !methods.includes(rule.method)) throw new Error('Invalid request rule');
+      assertAuthorized(value as Scope, rule.origin + rule.path, Date.parse(auth.validFrom));
+      const key = rule.origin + rule.path + ':' + rule.method;
+      if (seen.has(key)) throw new Error('Duplicate request rule'); seen.add(key);
+      if (!Array.isArray(rule.queryNames) || rule.queryNames.length > 20 || new Set(rule.queryNames).size !== rule.queryNames.length
+        || rule.queryNames.some((n: unknown) => typeof n !== 'string' || !/^[A-Za-z0-9_.-]{1,64}$/.test(n))) throw new Error('Invalid query names');
+      if (!Array.isArray(rule.bodyFormats) || rule.bodyFormats.length > 3 || new Set(rule.bodyFormats).size !== rule.bodyFormats.length
+        || rule.bodyFormats.some((f: unknown) => !['json', 'form', 'text'].includes(f as string))
+        || (['GET', 'HEAD'].includes(rule.method) && rule.bodyFormats.length)) throw new Error('Invalid body formats');
+    }
+  }
   fields(value.limits, ['maxRequests', 'minIntervalMs', 'timeoutMs', 'maxResponseBytes', 'maxDurationMs']);
   integer(value.limits.maxRequests, 1, 100);
   integer(value.limits.minIntervalMs, 0, 60000);
@@ -81,11 +125,41 @@ export function validatePlan(value: unknown, scope: Scope, checkTime = true): as
   if (value.schemaVersion !== 1 || !Array.isArray(value.steps) || !value.steps.length || value.steps.length > 100) throw new Error('Invalid plan');
   const ids = new Set();
   for (const step of value.steps) {
-    fields(step, ['id', 'method', 'url', 'credentialEnv']);
+    optionalFields(step, ['id', 'method', 'url', 'credentialEnv'], ['query', 'body', 'observe']);
     if (typeof step.id !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(step.id) || ids.has(step.id)) throw new Error('Invalid step ID');
     ids.add(step.id);
-    if (step.method !== 'GET') throw new Error('Only GET is supported');
     if (step.credentialEnv !== null && (typeof step.credentialEnv !== 'string' || !/^BBA_(TOKEN|COOKIE)_[A-Z0-9_]{1,50}$/.test(step.credentialEnv))) throw new Error('Invalid credential reference');
-    assertAuthorized(scope, step.url, checkTime ? Date.now() : Date.parse(scope.authorization.validFrom));
+    assertRequestAllowed(scope, step.url, requestSpec(step as Step), checkTime ? Date.now() : Date.parse(scope.authorization.validFrom));
+    if (step.observe !== undefined) validateProjections(step.observe);
   }
+}
+
+export function requestSpec(step: RequestSpec): RequestSpec {
+  return { method: step.method, ...(step.query === undefined ? {} : { query: step.query }), ...(step.body === undefined ? {} : { body: step.body }) };
+}
+
+export function assertRequestAllowed(scope: Scope, urlText: string, spec: RequestSpec, now = Date.now()): URL {
+  const url = assertAuthorized(scope, urlText, now);
+  optionalFields(spec, ['method'], ['query', 'body']);
+  if (!methods.includes(spec.method)) throw new Error('Unsupported method');
+  if (spec.query !== undefined) {
+    if (!Array.isArray(spec.query) || !spec.query.length || spec.query.length > 20) throw new Error('Invalid query');
+    const seen = new Set<string>();
+    for (const q of spec.query) {
+      fields(q, ['name', 'valueEnv']);
+      if (typeof q.name !== 'string' || !/^[A-Za-z0-9_.-]{1,64}$/.test(q.name) || seen.has(q.name)
+        || typeof q.valueEnv !== 'string' || !/^BBA_INPUT_[A-Z0-9_]{1,50}$/.test(q.valueEnv)) throw new Error('Invalid query reference');
+      seen.add(q.name);
+    }
+  }
+  if (spec.body !== undefined) {
+    fields(spec.body, ['format', 'valueEnv']);
+    if (['GET', 'HEAD'].includes(spec.method) || !['json', 'form', 'text'].includes(spec.body.format)
+      || typeof spec.body.valueEnv !== 'string' || !/^BBA_BODY_[A-Z0-9_]{1,50}$/.test(spec.body.valueEnv)) throw new Error('Invalid body reference');
+  }
+  if (spec.method !== 'GET' || spec.query || spec.body) {
+    const rule = scope.requestRules?.find(r => r.origin === url.origin && r.path === url.pathname && r.method === spec.method);
+    if (!rule || spec.query?.some(q => !rule.queryNames.includes(q.name)) || (spec.body && !rule.bodyFormats.includes(spec.body.format))) throw new Error('Request blocked: method or inputs outside scope');
+  }
+  return url;
 }

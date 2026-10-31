@@ -62,12 +62,32 @@ test('OpenAPI import projects servers, resolves local refs and reads security de
   assert.ok(surface.entries.every(e => e.basis === 'declared' && e.status === null));
 });
 
-test('OpenAPI import refuses cycles, external refs, server variables and Swagger 2', () => {
+test('Swagger 2 import preserves routes, optional auth and body parameter without copying examples', () => {
+  const doc = { swagger: '2.0', host: 'api.example.test', basePath: '/titan', schemes: ['https'],
+    security: [{ azuread: [] }],
+    parameters: { Query: { in: 'body', name: 'query', schema: { example: 'private-example' } } },
+    paths: { '/GetConfiguration': { get: {} }, '/v2/Query': { post: { security: [], parameters: [{ $ref: '#/parameters/Query' }] } } } };
+  const surface = importSurface(doc, 'openapi');
+  assert.equal(surface.entries.length, 2);
+  const query = surface.entries.find(e => e.path === '/titan/v2/Query')!;
+  assert.equal(query.origin, 'https://api.example.test');
+  assert.equal(query.method, 'POST');
+  assert.equal(query.authentication, 'declared-optional');
+  assert.deepEqual(query.parameters, [{ location: 'body', name: 'query' }]);
+  assert.equal(query.locator, '/paths/~1v2~1Query/post');
+  assert.equal(surface.entries.find(e => e.method === 'GET')!.authentication, 'declared-required');
+  assert.ok(!JSON.stringify(surface).includes('private-example'));
+  const { schemes: _schemes, ...withoutSchemes } = doc;
+  assert.equal(importSurface(withoutSchemes, 'openapi').entries[0].origin, null);
+  assert.throws(() => importSurface({ ...doc, host: 'api.example.test/unsafe' }, 'openapi'), /host/);
+});
+
+test('OpenAPI import refuses cycles, external refs, server variables and unsupported Swagger versions', () => {
   const base = (patch: any) => ({ openapi: '3.0.3', paths: {}, ...patch });
   assert.throws(() => importSurface(base({ paths: { '/a': { $ref: '#/paths/~1a' } } }), 'openapi'), /cyclic/);
   assert.throws(() => importSurface(base({ paths: { '/a': { $ref: 'https://evil.test/a.json' } } }), 'openapi'), /reference/);
   assert.throws(() => importSurface(base({ servers: [{ url: 'https://{env}.example.test' }], paths: { '/a': { get: {} } } }), 'openapi'), /variables/);
-  assert.throws(() => importSurface({ swagger: '2.0', paths: {} }, 'openapi'), /OpenAPI 3/);
+  assert.throws(() => importSurface({ swagger: '1.2', paths: {} }, 'openapi'), /Swagger 2.0/);
 });
 
 test('REA import requires complete capture Evidence and keeps its ordinals', () => {

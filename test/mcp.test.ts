@@ -42,13 +42,43 @@ test('MCP initializes, lists only offline tools by default and rejects network t
     assert.deepEqual(Object.keys(init.result.capabilities), ['tools']);
     assert.equal((await s.request('initialize', { protocolVersion: '1999-01-01' })).result.protocolVersion, '2025-06-18', 'unknown versions fall back to the newest supported');
     const names = (await s.request('tools/list')).result.tools.map((t: { name: string }) => t.name);
-    assert.deepEqual(names.sort(), ['evaluate_run', 'export_run', 'import_candidates', 'import_surface', 'inspect_run', 'report_run', 'scope_check']);
-    for (const network of ['run', 'resume', 'capture']) {
+    assert.deepEqual(names.sort(), ['artifact_view', 'campaign_link', 'campaign_open', 'campaign_policy_review', 'campaign_status', 'capabilities', 'compare_runs', 'evaluate_jwt', 'evaluate_run', 'evaluate_semantic', 'evidence_view', 'export_run', 'import_candidates', 'import_surface', 'inspect_budget', 'inspect_run', 'page_view', 'plan_investigation', 'prepare', 'report_run', 'scope_check', 'start_case', 'study_bundle', 'study_plan']);
+    for (const network of ['run', 'resume', 'capture', 'hunt', 'investigate', 'resume_investigation', 'browser_check', 'browser_scenario', 'jwt_check', 'resume_jwt', 'template_check', 'resume_template_check', 'ssrf_callback_check', 'resume_ssrf_callback', 'cache_check', 'resume_cache_check', 'race_check', 'csrf_check', 'study_run', 'resume_study', 'inspect_web_page', 'campaign_capture', 'campaign_execute', 'campaign_resume']) {
       const answer = await s.call(network, { scope: 'a', plan: 'b', out: 'c', run: 'd' });
       assert.equal(answer.error.code, -32602, network);
     }
     assert.deepEqual((await s.request('ping')).result, {});
+    assert.equal(JSON.parse((await s.call('capabilities', {})).result.content[0].text).confirmation.length, 7);
     assert.equal((await s.request('resources/list')).error.code, -32601);
+  } finally { assert.equal(await s.close(), 0); await rm(root, { recursive: true, force: true }); }
+});
+
+test('MCP binds a saved policy source and detects later changes without network access', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'bba-mcp-policy-'));
+  const s = server(root);
+  try {
+    const opened = await s.call('campaign_open', { target: 'https://program.example.test/', out: 'campaign' });
+    assert.equal(opened.result.isError, false, JSON.stringify(opened));
+    const scope = { schemaVersion: 1, mode: 'public-https', budgetId: 'mcp-policy-fixture',
+      authorization: { reference: 'owned policy fixture', validFrom: new Date(Date.now() - 1000).toISOString(),
+        validUntil: new Date(Date.now() + 600000).toISOString() },
+      allowed: [{ origin: 'https://program.example.test', paths: ['/'] }], excluded: [],
+      limits: { maxRequests: 5, minIntervalMs: 0, timeoutMs: 2000, maxResponseBytes: 4096, maxDurationMs: 60000 } };
+    await writeFile(join(root, 'campaign', 'scope.json'), JSON.stringify(scope));
+    const linkedScope = await s.call('campaign_link', { campaign: 'campaign', kind: 'scope', artifact: 'campaign/scope.json' });
+    assert.equal(linkedScope.result.isError, false, JSON.stringify(linkedScope));
+    await writeFile(join(root, 'campaign', 'policy-source.txt'), 'Synthetic owned policy fixture for the exact origin and GET /.');
+    const reviewed = await s.call('campaign_policy_review', { campaign: 'campaign',
+      sourceUrl: 'https://program.example.test/policy', sourceKind: 'owner-written-authorization', decision: 'authorized' });
+    assert.equal(reviewed.result.isError, false, JSON.stringify(reviewed));
+    const linkedPolicy = await s.call('campaign_link', { campaign: 'campaign', kind: 'policy', artifact: 'campaign/policy.json' });
+    assert.equal(linkedPolicy.result.isError, false, JSON.stringify(linkedPolicy));
+    const status = await s.call('campaign_status', { campaign: 'campaign' });
+    assert.equal(JSON.parse(status.result.content[0].text).policySourceBound, true);
+    await writeFile(join(root, 'campaign', 'policy-source.txt'), 'Changed synthetic policy fixture.');
+    const changed = await s.call('campaign_status', { campaign: 'campaign' });
+    assert.equal(changed.result.isError, true);
+    assert.match(changed.result.content[0].text, /Policy source changed/);
   } finally { assert.equal(await s.close(), 0); await rm(root, { recursive: true, force: true }); }
 });
 
@@ -121,7 +151,7 @@ test('MCP with --allow-network runs a plan and evaluates it without exposing cre
     assert.equal(ran.result.isError, false, JSON.stringify(ran));
     assert.equal(JSON.parse(ran.result.content[0].text).status, 'completed');
     const evaluated = await s.call('evaluate_run', { run: 'run', checks: 'checks.json', out: 'evaluation.md' });
-    assert.deepEqual(JSON.parse(evaluated.result.content[0].text), [{ check: 'admin-users', class: 'bfla', status: 'confirmed' }]);
+    assert.deepEqual(JSON.parse(evaluated.result.content[0].text), [{ check: 'admin-users', class: 'bfla', status: 'needs-validation' }]);
     assert.deepEqual(JSON.parse((await s.call('inspect_run', { run: 'run' })).result.content[0].text).succeeded, 3);
     for (const secret of [lab.credentials.admin, lab.credentials.user]) assert.doesNotMatch(s.transcript() + await readFile(join(root, 'evaluation.md'), 'utf8'), new RegExp(secret));
   } finally { assert.equal(await s.close(), 0); await lab.close(); await rm(root, { recursive: true, force: true }); }
@@ -129,13 +159,14 @@ test('MCP with --allow-network runs a plan and evaluates it without exposing cre
 
 test('doctor reports local prerequisites and prints no secret value', async () => {
   const secret = 'doctor-secret-value-123456';
-  const result = await promisify(execFile)(process.execPath, [cli, 'doctor'], { env: { ...process.env, BBA_TOKEN_DOCTOR: secret } })
+  const result = await promisify(execFile)(process.execPath, [cli, 'doctor'], { env: { ...process.env, BBA_TOKEN_DOCTOR: secret, BBA_HEADER_DOCTOR: secret } })
     .then(r => ({ code: 0, ...r }), (e: { code: number; stdout: string }) => ({ code: e.code, stdout: e.stdout }));
   const report = JSON.parse(result.stdout);
   const byName = Object.fromEntries(report.checks.map((c: { name: string; ok: boolean; detail: string }) => [c.name, c]));
   for (const name of ['node', 'sqlite', 'loopback', 'temp-directory']) assert.equal(byName[name].ok, true, name);
   assert.equal(result.code, report.ok ? 0 : 1);
   assert.match(byName.credentials.detail, /BBA_TOKEN_DOCTOR/);
+  assert.match(byName.credentials.detail, /BBA_HEADER_DOCTOR/);
   assert.doesNotMatch(result.stdout, new RegExp(secret));
 });
 

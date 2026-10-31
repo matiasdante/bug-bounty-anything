@@ -41,7 +41,7 @@ export async function doctor(): Promise<{ ok: boolean; checks: DoctorCheck[] }> 
       try { return 'Chromium ' + isolated.browser.version() + ' launches with the isolation flags'; } finally { await isolated.close(); }
     }),
   ];
-  const names = Object.keys(process.env).filter(k => /^BBA_(TOKEN|COOKIE)_[A-Z0-9_]+$/.test(k)).sort();
-  checks.push({ name: 'credentials', ok: true, detail: names.length ? 'present (names only): ' + names.join(', ') : 'none set; only anonymous steps can run' });
+  const names = Object.keys(process.env).filter(k => /^BBA_(TOKEN|COOKIE|HEADER|INPUT|BODY)_[A-Z0-9_]+$/.test(k)).sort();
+  checks.push({ name: 'credentials', ok: true, detail: names.length ? 'present (names only): ' + names.join(', ') : 'none set; only anonymous steps without required identifying headers can run' });
   return { ok: checks.every(c => c.ok), checks };
 }

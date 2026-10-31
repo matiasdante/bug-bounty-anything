@@ -1,6 +1,6 @@
 import { writeFileSync } from 'node:fs';
 import { digest } from './contracts.ts';
-import { fields } from './scope.ts';
+import { fields, requestSpec } from './scope.ts';
 import { inspectSession, readJson } from './session.ts';
 import type { Session } from './session.ts';
 
@@ -10,7 +10,7 @@ export type Check = { id: string; class: CheckClass; control: string; baseline: 
 export type Checks = { schemaVersion: 1; checks: Check[] };
 type Ref = { stepId: string; status: number | null; sha256: string | null };
 export type Finding = {
-  checkId: string; class: CheckClass; status: 'confirmed' | 'not-reproduced' | 'unresolved';
+  checkId: string; class: CheckClass; status: 'confirmed' | 'needs-validation' | 'not-reproduced' | 'unresolved';
   observation: string; steps: { control: Ref; baseline: Ref; probe: Ref }; limitation: string;
 };
 export type Evaluation = {
@@ -42,6 +42,8 @@ export function validateChecks(value: unknown, session: Session): asserts value 
     if (control.credentialEnv !== null || !baseline.credentialEnv || !probe.credentialEnv
       || baseline.credentialEnv === probe.credentialEnv) throw new Error('Check identities do not form a control and two distinct credentials');
     if (control.url !== baseline.url || baseline.url !== probe.url) throw new Error('Check steps must read the same URL');
+    if ([control, baseline, probe].some(s => s.method !== 'GET')
+      || digest(requestSpec(control)) !== digest(requestSpec(baseline)) || digest(requestSpec(baseline)) !== digest(requestSpec(probe))) throw new Error('Checks require the same GET request inputs');
   }
 }
 
@@ -61,13 +63,13 @@ export function evaluateChecks(session: Session, value: unknown): Evaluation {
     } else if (baseline.status !== 200) {
       observation = 'The authorized baseline did not succeed.';
     } else if (probe.status === 200 && probe.sha256 === baseline.sha256) {
-      status = 'confirmed';
-      observation = 'The probe identity received a response identical to the privileged baseline.';
+      status = 'needs-validation';
+      observation = 'Response hashes match, but ownership, roles and the protected-data boundary were not verified. This is not a confirmed vulnerability.';
     } else if (probe.status === 401 || probe.status === 403 || probe.status === 404) {
       status = 'not-reproduced';
       observation = 'The probe identity was denied while the baseline succeeded.';
     } else if (probe.status === 200 && check.class === 'property-exposure') {
-      status = 'not-reproduced';
+      status = 'unresolved';
       observation = 'The probe identity received a different response than the privileged baseline; partial exposure is not excluded.';
     } else {
       observation = 'The probe response proved neither identical access nor a denial.';
@@ -91,7 +93,7 @@ ${rows.join('\n')}
 ## Limitaciones
 
 ${[...new Set(e.findings.map(f => f.limitation))].map(l => '- ' + l).join('\n')}
-- \`confirmed\` es una comparación de hashes de respuestas HTTP; no mide impacto ni severidad. \`not-reproduced\` no significa seguro y \`unresolved\` no es un resultado negativo.
+- \`needs-validation\` indica coincidencia de hashes sin propiedad/roles verificados; no mide impacto ni severidad y no confirma una vulnerabilidad. \`not-reproduced\` no significa seguro y \`unresolved\` no es un resultado negativo.
 `;
 }
 

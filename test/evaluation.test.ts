@@ -13,7 +13,7 @@ test('the frozen set is unchanged and every mandatory case passes with the expec
   const report = await runEvaluation();
   assert.deepEqual(report.cases.filter(c => !c.passed), []);
   assert.deepEqual({ ...report.metrics, requests: 0, ms: 0 }, {
-    cases: 18, passed: 18, requests: 0, ms: 0, detections: 3, omissions: 0, falsePositives: 0, unresolvedAsExpected: 3,
+    cases: 18, passed: 18, requests: 0, ms: 0, detections: 0, omissions: 3, falsePositives: 0, unresolvedAsExpected: 3,
     scopeViolations: 0, secretOccurrences: 0, repeatedRequests: 0,
   });
   for (const group of ['detection', 'inconclusive', 'scope', 'secrets', 'recovery']) assert.ok(report.cases.some(c => c.group === group), group);

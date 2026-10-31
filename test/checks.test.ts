@@ -13,11 +13,11 @@ import { startRoleLab } from '../src/role-lab.ts';
 import type { Session } from '../src/session.ts';
 
 for (const kind of checkClasses) {
-  test(`${kind}: vulnerable lab is confirmed and fixed lab is not reproduced, with real HTTP`, async () => {
+  test(`${kind}: hash-only lab comparisons remain leads and ambiguous properties stay unresolved`, async () => {
     const vulnerable = await runLabCase(kind, 'vulnerable');
     const fixed = await runLabCase(kind, 'fixed');
-    assert.deepEqual(vulnerable.findings.map(f => f.status), ['confirmed']);
-    assert.deepEqual(fixed.findings.map(f => f.status), ['not-reproduced']);
+    assert.deepEqual(vulnerable.findings.map(f => f.status), ['needs-validation']);
+    assert.deepEqual(fixed.findings.map(f => f.status), [kind === 'property-exposure' ? 'unresolved' : 'not-reproduced']);
     const [v, f] = [vulnerable.findings[0].steps, fixed.findings[0].steps];
     assert.deepEqual([v.control.status, v.baseline.status, v.probe.status], [401, 200, 200]);
     assert.equal(v.probe.sha256, v.baseline.sha256);
@@ -48,8 +48,8 @@ test('anything that is not clean evidence stays unresolved', () => {
   assert.equal(verdict(session({ control: [401, 'a'], baseline: [200, 'a'], probe: null })), 'unresolved', 'probe never completed');
   assert.equal(verdict(session({ control: [401, 'a'], baseline: [200, 'a'], probe: [500, 'b'] })), 'unresolved', 'server error is not a denial');
   assert.equal(verdict(session({ control: [401, 'a'], baseline: [200, 'a'], probe: [200, 'b'] })), 'unresolved', 'different 200 is not a BOLA denial');
-  assert.equal(verdict(session({ control: [401, 'a'], baseline: [200, 'a'], probe: [200, 'b'] }), check({ class: 'property-exposure' })), 'not-reproduced');
-  assert.equal(verdict(session({ control: [401, 'a'], baseline: [200, 'a'], probe: [200, 'a'] })), 'confirmed');
+  assert.equal(verdict(session({ control: [401, 'a'], baseline: [200, 'a'], probe: [200, 'b'] }), check({ class: 'property-exposure' })), 'unresolved');
+  assert.equal(verdict(session({ control: [401, 'a'], baseline: [200, 'a'], probe: [200, 'a'] })), 'needs-validation');
   assert.equal(verdict(session({ control: [403, 'a'], baseline: [200, 'a'], probe: [404, 'b'] })), 'not-reproduced');
 });
 
@@ -89,19 +89,19 @@ test('CLI runs a session against the role lab, evaluates it and refuses to overw
     assert.equal(executed.status, 0, executed.stdout + executed.stderr);
     const json = await run('evaluate-run', join(dir, 'run'), '--checks', join(dir, 'checks.json'), '--out', join(dir, 'e.json'));
     assert.equal(json.status, 0, json.stderr);
-    assert.deepEqual(JSON.parse(json.stdout), [{ check: 'admin-users', class: 'bfla', status: 'confirmed' }]);
+    assert.deepEqual(JSON.parse(json.stdout), [{ check: 'admin-users', class: 'bfla', status: 'needs-validation' }]);
     const saved = JSON.parse(await readFile(join(dir, 'e.json'), 'utf8'));
     assert.match(saved.sha256, /^[a-f0-9]{64}$/);
     const md = await run('evaluate-run', join(dir, 'run'), '--checks', join(dir, 'checks.json'), '--out', join(dir, 'e.md'));
     assert.equal(md.status, 0, md.stderr);
-    assert.match(await readFile(join(dir, 'e.md'), 'utf8'), /admin-users \| bfla \| \*\*confirmed\*\*/);
+    assert.match(await readFile(join(dir, 'e.md'), 'utf8'), /admin-users \| bfla \| \*\*needs-validation\*\*/);
     assert.equal((await run('evaluate-run', join(dir, 'run'), '--checks', join(dir, 'checks.json'), '--out', join(dir, 'e.json'))).status, 1);
     const written = json.stdout + executed.stdout + await readFile(join(dir, 'e.json'), 'utf8');
     for (const secret of [lab.credentials.admin, lab.credentials.user]) assert.doesNotMatch(written, new RegExp(secret));
   } finally { await lab.close(); await rm(dir, { recursive: true, force: true }); }
 });
 
-test('markdown report states that confirmed is a hash comparison, not severity', () => {
+test('markdown report states that hash matches do not establish impact or severity', () => {
   const e = evaluateChecks(session({ control: [401, 'a'], baseline: [200, 'a'], probe: [200, 'a'] }), check());
   assert.match(evaluationMarkdown(e), /no mide impacto ni severidad/);
 });

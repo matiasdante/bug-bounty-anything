@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 import { createSocket } from 'node:dgram';
-import { captureSurface, launchIsolated } from '../src/capture.ts';
+import { captureSurface, launchIsolated, readPageSurface } from '../src/capture.ts';
 import type { Plan, Scope } from '../src/scope.ts';
 
 const browser = await chromium.launch({ headless: true }).then(b => b.close().then(() => true), () => false);
@@ -37,7 +37,9 @@ async function fixture() {
   const app = await listen(url => url === '/leak' ? [200, 'text/html', `<!doctype html><link rel="preconnect" href="${other.origin}"><link rel="dns-prefetch" href="${other.origin}"><img src="${other.origin}/pixel">`] : url === '/app' ? [200, 'text/html', `<!doctype html><script>
     fetch('/api/doc/42'); fetch('/api/admin'); fetch('/api/doc/42', { method: 'POST' });
     fetch('${other.origin}/leak'); try { new WebSocket('${other.origin.replace('http', 'ws')}/ws'); } catch {}
-  </script>`] : url === '/api/doc/42' ? [200, 'application/json', '{"id":42}'] : [404, 'text/plain', 'no']);
+  </script><a href="/api/doc/42?token=link-secret">document</a><a href="${other.origin}/external">external</a>
+  <form action="/submit?token=form-secret" method="post"><input name="email" value="field-secret"><input name="__token" value="hidden-secret"></form>
+  <script src="/hidden.js?token=script-secret"></script>`] : url === '/api/doc/42' ? [200, 'application/json', '{"id":42}'] : [404, 'text/plain', 'no']);
   const scope = (maxRequests: number, mode: Scope['mode'] = 'loopback-lab'): Scope => ({
     schemaVersion: 1, mode,
     authorization: { reference: 'BBA capture test', validFrom: new Date(Date.now() - 1000).toISOString(), validUntil: new Date(Date.now() + 600000).toISOString() },
@@ -53,7 +55,7 @@ test('browser capture sends only exact in-scope GETs with the plan token and blo
   const f = await fixture();
   try {
     const out = join(f.dir, 'run');
-    const { capture, surface } = await captureSurface(out, f.scope(10), f.plan, { credentials: { BBA_TOKEN_A: token } });
+    const { capture, surface, pages } = await captureSurface(out, f.scope(10), f.plan, { credentials: { BBA_TOKEN_A: token } });
     assert.deepEqual(f.app.hits.sort(), [`GET /api/doc/42 Bearer ${token}`, `GET /app Bearer ${token}`]);
     assert.deepEqual(f.other.hits, [], 'other origin and WebSocket never contacted');
     assert.equal(capture.stopReason, null);
@@ -64,7 +66,15 @@ test('browser capture sends only exact in-scope GETs with the plan token and blo
     assert.deepEqual(sent.map(e => `${e.path} ${e.status} ${e.authentication}`).sort(),
       ['/api/doc/{opaque} 200 credential-present', '/app 200 credential-present']);
     assert.ok(surface.entries.some(e => e.method === 'POST' && e.status === null));
-    for (const file of ['surface.json', 'capture.json']) assert.doesNotMatch(await readFile(join(out, file), 'utf8'), new RegExp(token));
+    assert.deepEqual(pages.pages[0].links, [{ path: '/api/doc/{opaque}', inScope: true }]);
+    assert.deepEqual(pages.pages[0].forms, [{ action: '/submit', method: 'POST', inScope: false, fields: ['email', '__token'] }]);
+    assert.deepEqual(pages.pages[0].scripts, ['/hidden.js']);
+    assert.deepEqual(readPageSurface(out), pages);
+    for (const file of ['surface.json', 'capture.json', 'pages.json']) {
+      const content = await readFile(join(out, file), 'utf8');
+      for (const secret of [token, 'link-secret', 'form-secret', 'field-secret', 'hidden-secret', 'script-secret'])
+        assert.ok(!content.includes(secret), `${file} leaked ${secret}`);
+    }
     await assert.rejects(captureSurface(out, f.scope(10), f.plan, { credentials: { BBA_TOKEN_A: token } }), /already exists/);
   } finally { await f.close(); }
 });
@@ -149,5 +159,25 @@ test('CLI capture stops at the request budget and exits 1 without sending more',
     assert.equal(JSON.parse(result.stdout).stopReason, 'budget-exhausted');
     assert.deepEqual(f.app.hits, [`GET /app Bearer ${token}`]);
     assert.doesNotMatch(result.stdout + result.stderr, new RegExp(token));
+  } finally { await f.close(); }
+});
+
+test('CLI inspects one authorized page and reads its saved DOM facts offline', { skip }, async () => {
+  const f = await fixture();
+  try {
+    const scopeFile = join(f.dir, 'scope.json'), out = join(f.dir, 'page');
+    await writeFile(scopeFile, JSON.stringify(f.scope(10)));
+    const cli = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
+    const inspected = await promisify(execFile)(process.execPath,
+      [cli, 'inspect-web-page', '--scope', scopeFile, '--url', f.app.origin + '/app', '--out', out]);
+    const result = JSON.parse(inspected.stdout);
+    assert.equal(result.page.observed, true);
+    assert.equal(result.page.forms[0].action, '/submit');
+    const before = f.app.hits.length;
+    const viewed = await promisify(execFile)(process.execPath, [cli, 'page-view', out]);
+    assert.deepEqual(JSON.parse(viewed.stdout).pages[0], result.page);
+    assert.equal(f.app.hits.length, before, 'page-view is offline');
+    await writeFile(join(out, 'pages.json'), '{"pages":{},"sha256":"bad"}');
+    await assert.rejects(promisify(execFile)(process.execPath, [cli, 'page-view', out]), /Page surface integrity mismatch/);
   } finally { await f.close(); }
 });

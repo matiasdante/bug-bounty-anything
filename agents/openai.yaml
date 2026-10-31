@@ -1,0 +1,4 @@
+interface:
+  display_name: "Bug Bounty Anything"
+  short_description: "Investigar servicios autorizados y preparar hallazgos"
+  default_prompt: "Usá $bug-bounty-anything para investigar este servicio dentro de su política y preparar hallazgos reproducibles."

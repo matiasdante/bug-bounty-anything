@@ -16,7 +16,7 @@ const safe = (error: unknown) => {
 export function serveMcp(options: { root: string; allowNetwork: boolean; input: Readable; output: Writable }): Promise<void> {
   const path = confine(options.root);
   const available = tools.filter(t => options.allowNetwork || !t.network);
-  const send = (message: unknown) => options.output.write(JSON.stringify(message) + '\n');
+  const send = (message: unknown): void => { options.output.write(JSON.stringify(message) + '\n'); };
   const fail = (id: unknown, code: number, message: string) => send({ jsonrpc: '2.0', id, error: { code, message } });
 
   async function handle(message: any) {

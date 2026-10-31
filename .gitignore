@@ -6,4 +6,5 @@ runs/
 *.log
 dist/
 *.tgz
+*.zip
 .build-test/
