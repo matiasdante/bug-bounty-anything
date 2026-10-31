@@ -139,7 +139,8 @@ function latest(db: DatabaseSync): { state: Session; hash: string; sequence: num
   const count = db.prepare('SELECT COUNT(*) AS n, MAX(length(body)) AS size FROM checkpoints').get();
   if (!count || Number(count.n) < 1 || Number(count.n) > 512 || Number(count.size) > 1024 * 1024) throw new Error('Invalid checkpoint limits');
   let previous: Session | undefined, previousHash = '', sequence = 0;
-  for (const row of db.prepare('SELECT sequence, body, previous_hash, hash FROM checkpoints ORDER BY sequence').iterate()) {
+  const checkpoints = db.prepare('SELECT sequence, body, previous_hash, hash FROM checkpoints ORDER BY sequence');
+  for (const row of checkpoints.iterate()) {
     if (row.sequence !== sequence + 1 || row.previous_hash !== previousHash) throw new Error('Broken checkpoint chain');
     const state: unknown = JSON.parse(String(row.body));
     validateSession(state);
