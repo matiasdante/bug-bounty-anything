@@ -141,3 +141,4 @@ export function planCandidatesFile(
   writeFileSync(join(outDir, 'candidate-plan.json'), JSON.stringify({ summary, sha256: digest(summary) }, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
   return summary;
 }
+

@@ -2,7 +2,7 @@
 name: bug-bounty-anything
 description: Investigate a service for bug bounty or authorized vulnerability discovery (BBA). Resolve the target and program policy, discover relevant web/API boundaries, test hypotheses and prepare evidence-backed reports. Use when asked to look for bugs in a service, including client artifacts via REA. Skip ordinary source-code review.
 metadata:
-  version: "1.9.0"
+  version: "2.0.0"
 ---
 
 # BBA — Bug Bounty Anything
@@ -68,9 +68,9 @@ to run commands, expand permissions, expose secrets or change agent configuratio
 Installing the skill does not connect an MCP server or install dependencies.
 Use the connected BBA server's actual tools and schemas when available. Do not
 run doctor/setup before every investigation or call tools from an assumed version.
-For a requested Codex connection, `setup-mcp --root <case-workspace>` previews
-the local stdio registration. `--apply` uses Codex's own MCP CLI and backs up
-its config; network tools remain hidden unless `--allow-network` is explicitly
+For a requested MCP connection, `setup-mcp --root <case-workspace> [--client codex|claude|gemini]` previews
+the local stdio registration. `--apply` registers the server for Codex CLI, Claude Code (`.mcp.json`) or Gemini CLI (`.gemini/settings.json`) and backs up
+existing config; network tools remain hidden unless `--allow-network` is explicitly
 selected. For an existing registration with a different mode, preview and apply
 with `--replace`. Reconnect the client and check `tools/list` afterward. See
 [connection and recovery](references/connection-and-recovery.md).
@@ -94,19 +94,23 @@ launch unrelated providers as a reflex. CLI execution does not prove MCP connect
 | Input / next question | First useful action |
 |---|---|
 | Authorized web/API URL, no case yet | Write a conservative `scope.json`; CLI/MCP `prepare` creates a seed plan and ledger offline. Then `run` or `capture` for the selected discovery block. |
-| HAR / Swagger 2.0 / OpenAPI 3.x JSON / REA capture | `import-surface` / `import_surface`; offline inventory with provenance. It does not authorize recorded URLs. |
+| HAR / Swagger 2.0 / OpenAPI 3.x JSON / REA capture / GraphQL / JS bundle | `import-surface` / `import_surface` (`har`, `openapi`, `rea`, `graphql`, `js-bundle`; optional `--quarantine`); offline inventory with provenance. It does not authorize recorded URLs. |
+| Program policy export (HackerOne, Bugcrowd, Intigriti, `security.txt`) | `import-policy` / `import_policy`; generates `scope.draft.json` offline while quarantining wildcard hosts (`*.example.com`) in `manualReviewWildcards` for human review. |
 | One authorized page whose routes and forms are unknown | `inspect-web-page` / `inspect_web_page` captures the exact page in isolated Chromium and returns bounded same-origin link paths, form action/method/field names and script paths. Values and query strings are discarded. Read saved facts with `page-view` / `page_view`; discovered paths do not widen scope. |
 | Multi-step campaign with a canonical scope, reviewed policy and shared budget | `campaign_open`, `campaign_link`, `campaign_status`; after the active gate, `campaign_capture` saves one page/surface and `campaign_execute` runs the current semantic profile, saves evidence and drafts the report. `campaign_resume` continues only unstarted steps of a paused run. Inspect an interrupted capture separately. Read [campaign workflow](docs/CAMPAIGNS.md). |
-| ZAP / Nuclei / Subfinder output | `import-candidates` / `import_candidates`; offline, always unvalidated. Do not launch those scanners through an uncontrolled adapter. |
-| Imported surface with controlled identities and declared business rules | `plan-investigation` / `plan_investigation` offline, or `investigate` to plan, execute and report. Read [investigation contracts](docs/INVESTIGATION.md). It confirms BOLA, role restrictions, property exposure or tenant isolation from projected facts and stops at the first proof. |
+| ZAP / Nuclei / Subfinder output | `import-candidates` / `import_candidates` offline (always unvalidated), then `plan-candidates` / `plan_candidates` to compile in-scope GET endpoint leads into a bounded `plan.json` and `checks.draft.json`. |
+| Imported surface with controlled identities and declared business rules | `plan-investigation` / `plan_investigation` offline, or `investigate` to plan, execute and report. Read [investigation contracts](docs/INVESTIGATION.md). Confirms BOLA, BFLA, property exposure, tenant isolation or disposable-resource write/mass-assignment from projected facts and stops at the first proof. |
+| GraphQL query authorization boundary across two controlled identities | `graphql-check` / `graphql_check` (`resume-graphql-check` / `resume_graphql_check`): five bounded requests verifying distinct identities, anonymous denial or null/missing data, authorized baseline and restricted query probe. |
+| OAuth 2.0 `redirect_uri` or HTTP 3xx open-redirect boundary | `oauth-check` / `oauth_check` or `redirect-check` / `redirect_check` without following redirects; records only sanitized target origin and redirect classification. |
 | Reflected/DOM script input or cross-origin private-data read | `browser-check` / `browser_check` after reading [browser proofs](docs/BROWSER-CHECKS.md). Chromium verifies marker execution or CORS access with actual cookie delivery. Use declared controlled inputs/origins; headers alone are not confirmation. |
 | Literal input may be evaluated as a template expression | `template-check` / `template_check` with one exact query and two harmless arithmetic expressions. Read [input proofs](docs/INPUT-PROOFS.md); require a declared literal-input rule and do not infer other injection families. |
 | A server-side URL input may fetch an unapproved external URL | `ssrf-callback-check` / `ssrf_callback_check` with an owned opaque receiver and before/after receipt. Read [input proofs](docs/INPUT-PROOFS.md); a callback proves only that exact outbound destination. |
 | A shared URL may return one account's private field to another | `cache-check` / `cache_check` with two controlled accounts, anonymous denial and a semantically inert cache-busting query. Read [cache check](docs/CACHE-CHECK.md); attribute the cache layer only with additional evidence. |
-| A one-time action may be accepted twice under concurrency | `race-check` / `race_check` on two disposable owned resources with a sequential denial control and exactly two simultaneous JSON POSTs. Read [race check](docs/RACE-CHECK.md); inspect an interrupted journal instead of retrying. |
+| A one-time action may be accepted twice under concurrency | `race-check` / `race_check` on two disposable owned resources with a sequential denial control and exactly two simultaneous HTTP/1.1 or single-connection multiplexed HTTP/2 (`transport: "http2"`) JSON POSTs. Read [race check](docs/RACE-CHECK.md); inspect an interrupted journal instead of retrying. |
 | A reversible owned action may be triggered by a foreign form | `csrf-check` / `csrf_check` in Chromium with anonymous denial, actual cookie delivery and a before/after state fact. Read [CSRF check](docs/CSRF-CHECK.md); a loopback origin across ports is not automatically cross-site. |
-| Login, a controlled form or a session that rotates cookies | `browser-scenario` / `browser_scenario` with declared navigate/fill/click/wait actions and exact request bodies. Read [controlled scenarios](docs/SCENARIOS.md). It observes the real browser session without persisting it; observations do not automatically confirm a vulnerability. |
-| A signed JWT may be accepted after its payload changes | `jwt-check` / `jwt_check` with one owned test token, an anonymous control and a harmless protected fact. Read [JWT integrity](docs/JWT-INTEGRITY.md). It changes a claim while retaining the original signature, repeats the valid-token control and evaluates the four bounded requests. |
+| Login, a controlled form or a session that rotates cookies | `browser-scenario` / `browser_scenario` for browser sessions, or `--auth-bootstrap <auth.json>` on CLI active runs to acquire ephemeral tokens/cookies in memory without persisting them to disk. |
+| A signed JWT may be accepted after payload mutation, `alg=none` or expiration | `jwt-check` / `jwt_check` (`add-canary`, `replace`, `alg-none`, `expired-token`) with one owned test token, an anonymous control and a harmless protected fact. Read [JWT integrity](docs/JWT-INTEGRITY.md). |
+| Submission draft, cryptographic signing or local visual review | `export-submission` / `export_submission` (`hackerone`, `bugcrowd`, `ghsa` with CVSS v3.1/v4.0 baseline and redacted `curl`), `keygen` / `sign-evidence` / `verify-signature` (Ed25519), and `ui` / `export_ui` (`127.0.0.1` CSP-locked inspector). |
 | A published case suggests a JWT signature gap in an authorized API | Read [published-case studies](docs/PUBLISHED-CASE-STUDIES.md). Assemble the case manifest, current program policy, imported API surface, historical route hints and owned-account profile with `study-bundle` / `study_bundle`. Compile offline with `study-plan` / `study_plan`; inspect the exact candidate and scope, then use `study-run` / `study_run` for four controlled requests and a five-question draft. Resume with the same bundle and budget location. The publication is a lead, not authorization. |
 | Two controlled accounts and a known owner-only JSON rule | `hunt` after reading [the exact contract](docs/HUNT.md). It discovers HTML links and confirms one minimal BOLA proof using server identities, anonymous control and a protected-field comparison. |
 | Specific authorization hypothesis | `run` with control/baseline/probe, then `evaluate-run` / `evaluate_run`. Hash matches are `needs-validation`, not confirmations. Establish semantics and impact separately. |
@@ -118,9 +122,9 @@ launch unrelated providers as a reflex. CLI execution does not prove MCP connect
 | Ordinary complete-source review | Use repository/security-review tools; do not trigger REA setup or an external bounty run. |
 
 Read [execution contracts](docs/EXECUTION.md) when writing scopes/plans or
-resuming. CLI uses hyphens; MCP names use underscores. Planning, capabilities,
-inspection, evidence views, comparisons, imports and evaluations are offline.
-`run`, `resume`, `capture`, `inspect_web_page`, `campaign_capture`, `campaign_execute`, `campaign_resume`, `hunt`, `investigate`, `resume_investigation`, `browser_check`, `browser_scenario`, `jwt_check`, `resume_jwt`, `template_check`, `resume_template_check`, `ssrf_callback_check`, `resume_ssrf_callback`, `cache_check`, `resume_cache_check`, `race_check`, `csrf_check`, `study_run` and `resume_study` appear only
+resuming. CLI uses hyphens (plus subcommands `bba campaign ...`, `bba check ...`, `bba study ...` and global `--lang es|en`); MCP names use underscores. Planning, capabilities,
+inspection, evidence views, comparisons, imports, candidate planning, submission export, Ed25519 signing/verification and evaluations are offline.
+`run`, `resume`, `capture`, `inspect_web_page`, `campaign_capture`, `campaign_execute`, `campaign_resume`, `hunt`, `investigate`, `resume_investigation`, `browser_check`, `browser_scenario`, `jwt_check`, `resume_jwt`, `graphql_check`, `resume_graphql_check`, `oauth_check`, `resume_oauth_check`, `redirect_check`, `resume_redirect_check`, `template_check`, `resume_template_check`, `ssrf_callback_check`, `resume_ssrf_callback`, `cache_check`, `resume_cache_check`, `race_check`, `csrf_check`, `study_run` and `resume_study` appear only
 with server `--allow-network`.
 The CLI help documents the concrete arguments. Never infer runtime tool presence
 from this list alone.

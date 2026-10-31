@@ -188,3 +188,4 @@ export function verifyEvidenceSignature(
     payloadSha256: rawEnvelope.payloadSha256,
   };
 }
+

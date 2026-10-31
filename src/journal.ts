@@ -46,3 +46,4 @@ export async function waitIntervalOrDeadline(
   if (signal?.aborted) throw new Error('cancelled');
   if (Date.now() >= deadline) throw new Error('deadline');
 }
+

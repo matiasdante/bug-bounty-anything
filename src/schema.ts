@@ -192,3 +192,4 @@ export function obj<S extends Record<string, Validator<any>>>(
 export function validateWithSchema<T>(schema: Validator<T>, value: unknown): T {
   return schema.parse(value, '');
 }
+

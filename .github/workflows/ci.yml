@@ -35,3 +35,4 @@ jobs:
 
       - name: Run typecheck, build and test suite
         run: npm run verify
+

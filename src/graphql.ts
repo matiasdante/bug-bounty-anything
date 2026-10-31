@@ -137,3 +137,4 @@ export function extractGraphqlSurfaceInput(input: unknown): {
   }
   return { origin, endpointPath, operations: parseIntrospectionObject(obj) };
 }
+

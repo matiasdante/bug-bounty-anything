@@ -161,3 +161,4 @@ export function extractJsBundleRoutes(input: unknown): RawJsRoute[] {
   }
   throw new Error('Expected JS source text, { code, origin? } or SourceMap v3 with sourcesContent');
 }
+

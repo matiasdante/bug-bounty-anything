@@ -31,3 +31,4 @@ export function extractLangFlag(args: string[]): { lang: Lang; rest: string[] } 
 export function pickText(lang: Lang, es: string, en: string): string {
   return lang === 'en' ? en : es;
 }
+

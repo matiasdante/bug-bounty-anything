@@ -157,3 +157,4 @@ export async function resumeRedirectCheck(folder: string, scope: Scope, config: 
   });
   return save(folder, 'redirect-resumed', session, config, options.lang);
 }
+

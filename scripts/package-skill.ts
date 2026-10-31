@@ -173,7 +173,10 @@ export function packageSkill(options: { projectRoot?: string; outputPath?: strin
   if (!skill.includes(`version: "${version}"`)) throw new Error('Skill and package versions differ');
   if (!/^metadata:[ \t]*$/m.test(skill)) throw new Error('Skill frontmatter metadata boundary missing');
   skill = skill.replace(/^metadata:[ \t]*$/m, 'disable-model-invocation: true\nmetadata:');
-  skill = replaceSection(skill, 'For a requested Codex connection,', 'Use `capabilities` when coverage is uncertain;', claudeConnectionSection);
+  const connAnchor = skill.includes('For a requested MCP connection,')
+    ? 'For a requested MCP connection,'
+    : 'For a requested Codex connection,';
+  skill = replaceSection(skill, connAnchor, 'Use `capabilities` when coverage is uncertain;', claudeConnectionSection);
   skill = replaceSection(skill, 'Without MCP, use the local CLI.', 'If the runtime is missing', claudeRuntimeSection);
 
   const items = [
@@ -236,3 +239,4 @@ if (isDirectEntry) {
   const res = packageSkill({ outputPath, includeNodeModules });
   console.log(`Entries: ${res.entries}\nArchive: ${res.archivePath}`);
 }
+

@@ -271,3 +271,4 @@ export async function resumeGraphqlCheck(folder: string, scope: Scope, config: G
   });
   return save(folder, 'graphql-resumed', session, config, options.lang);
 }
+

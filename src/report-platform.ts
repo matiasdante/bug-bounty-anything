@@ -243,3 +243,4 @@ export function exportSubmission(
   writeFileSync(outputPath, md, { flag: 'wx', mode: 0o600 });
   return { platform, status, vulnClass, cvss };
 }
+

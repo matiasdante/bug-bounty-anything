@@ -208,3 +208,4 @@ export async function resumeOauthCheck(folder: string, scope: Scope, config: Oau
   });
   return save(folder, 'oauth-resumed', session, config, options.lang);
 }
+

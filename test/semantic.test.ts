@@ -50,7 +50,7 @@ for (const kind of semanticClasses) for (const variant of ['vulnerable', 'denied
       const result = evaluateSemantic(state, checks);
       const expected = ['denied', 'filtered'].includes(variant) ? 'not-reproduced'
         : ['different', 'public', 'same-identity', 'expired', 'malformed', 'budget'].includes(variant)
-          || variant === 'wrong-role' && ['bfla', 'property-exposure'].includes(kind)
+          || variant === 'wrong-role' && ['bfla', 'property-exposure', 'mass-assignment'].includes(kind)
           || variant === 'same-tenant' && kind === 'tenant-isolation' || variant === 'wrong-owner' && kind === 'bola' ? 'unresolved' : 'confirmed';
       assert.equal(result.findings[0].status, expected, JSON.stringify(result));
       assert.ok(result.findings[0].evidence.every(id => id.startsWith(state.id + ':')));

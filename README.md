@@ -1,19 +1,20 @@
 # BBA — Bug Bounty Anything
 
-Skill y framework de descubrimiento, comprobación y documentación de vulnerabilidades con evidencia reproducible. Al invocarlo con un servicio, el agente resuelve objetivo y política, prepara el caso, descubre superficie y avanza por hipótesis hasta el reporte. La versión `1.9.0` agrega pruebas acotadas de evaluación de plantillas, callback de URL, exposición entre cuentas correlacionada con cache, carrera de uso único y formulario de otro origen. También liga una copia local de la política a su revisión mediante SHA-256. El [roadmap](docs/ROADMAP.md) distingue capacidades implementadas de las pendientes.
+Skill y motor local de descubrimiento, comprobación y documentación de vulnerabilidades con evidencia verificable. Al invocarlo sobre un servicio autorizado, el agente resuelve alcance y política, prepara el expediente, proyecta superficie y ejecuta comparaciones acotadas hasta generar el borrador. La versión `2.0.0` unifica el registro declarativo CLI/MCP, baja el piso de runtime a Node.js `>=22.13.0`, agrega soporte bilingüe (`--lang es|en`, español por defecto) y suma comprobadores de autorización GraphQL, conformidad OAuth 2.0 `redirect_uri`, redirección abierta, mutaciones/mass-assignment sobre recursos descartables, variantes JWT `alg=none`/`expired-token`, carreras multiplexadas sobre HTTP/2, bootstrap efímero de credenciales en memoria, importación offline de políticas y bundles JS/SourceMap, compilación de candidatos a planes, plantillas de envío con línea base CVSS v3.1/v4.0, firma criptográfica Ed25519 e inspector HTML local en `127.0.0.1`. El [roadmap](docs/ROADMAP.md) detalla el estado real y los límites de cada bloque.
 
-`investigate` genera hipótesis desde superficie importada y reglas declaradas; confirma BOLA, permisos por rol, propiedades privadas y aislamiento de tenants con identidades y hechos del servidor. `browser-check` verifica XSS por ejecución de marcador y CORS por lectura real en Chromium. `hunt` conserva su descubrimiento HTML y prueba BOLA especializada. `evaluate-run` sigue siendo el comparador histórico de hashes: genera candidatos `needs-validation`, sin confirmar. Los importadores de scanners generan candidatos sin validar. Los pilotos propios no equivalen a validación de un programa de terceros.
+`investigate` compila hipótesis desde superficie importada y reglas declaradas; confirma BOLA, BFLA, exposición de propiedades, aislamiento de tenants y mutación/mass-assignment sobre recursos descartables verificando identidades del servidor y estado antes/después. `graphql-check` verifica autorización por operación GraphQL. `oauth-check` y `redirect-check` clasifican cabeceras `Location` 3xx sin seguir redirecciones ni persistir códigos o query strings. `browser-check` verifica XSS por ejecución de marcador y CORS por lectura real en Chromium con aislamiento WebRTC reforzado. `hunt` conserva su descubrimiento HTML y prueba BOLA especializada. `evaluate-run` sigue siendo el comparador de hashes (`needs-validation`). Los importadores de scanners (`import-candidates`) y políticas (`import-policy`) operan offline sin validar ni expandir comodines automáticamente.
 
-`jwt-check` comprueba si un JWT firmado de una cuenta de prueba propia sigue funcionando tras alterar su payload sin volver a firmarlo. Contrasta control anónimo, token válido antes/después y token alterado sobre una única respuesta protegida; [contrato y límites](docs/JWT-INTEGRITY.md). Es el bloque implementado para investigar fallas de firma como la descrita en el [caso Titan](https://blog.faav.net/how-i-couldve-accessed-17-trillion-microsoft-records); no infiere identidades privilegiadas ni estima alcance de datos.
+`jwt-check` comprueba si un JWT de una cuenta propia sigue aceptándose tras alterar un claim con su firma original (`add-canary`, `replace`), eliminar la firma (`alg-none`) o presentar un token vencido (`expired-token`), preservando tipos JSON nativos; ver [contrato y límites](docs/JWT-INTEGRITY.md). No infiere identidades privilegiadas ni estima alcance sobre terceros.
 
-`study-bundle` → `study-plan` → `study-run` conecta un caso publicado, la política vigente, una superficie API importada y pistas históricas con ese comprobador. El plan es offline y genera un grafo de procedencia, scope exacto y una sola hipótesis si hay candidato único. La ejecución crea un reporte local con qué es, cómo se encontró, prueba, reproducción y corrección. [Guía, contratos y límites](docs/PUBLISHED-CASE-STUDIES.md). El primer caso es Titan; no constituye cobertura de cualquier URL o app.
+`study-bundle` → `study-plan` → `study-run` conecta un caso publicado, la política vigente, una superficie API importada y pistas históricas con el comprobador JWT, propagando también `requestHeaders` de la política al scope compilado. [Guía, contratos y límites](docs/PUBLISHED-CASE-STUDIES.md).
 
-Los recorridos nuevos se documentan en [entradas y callback](docs/INPUT-PROOFS.md), [cache](docs/CACHE-CHECK.md), [carrera](docs/RACE-CHECK.md) y [CSRF](docs/CSRF-CHECK.md). Cada uno exige rutas y métodos autorizados, datos o receptores propios y una regla de negocio declarada. Sus resultados se limitan al hecho medido; no detectan todas las variantes de la familia ni garantizan un hallazgo crítico. La [campaña](docs/CAMPAIGNS.md) permite ligar una copia local de la política, pero el operador debe comprobar su procedencia y vigencia.
+Los comprobadores de entrada y estado se documentan en [entradas y callback](docs/INPUT-PROOFS.md), [cache](docs/CACHE-CHECK.md), [carrera](docs/RACE-CHECK.md) (con transporte `http1` o multiplexación de conexión única `http2`) y [CSRF](docs/CSRF-CHECK.md). Cada recorrido exige rutas y métodos autorizados en el scope, recursos propios y controles negativos.
 
 ```powershell
 node dist/cli.js capabilities
 node dist/cli.js investigate --scope scope.json --surface surface.json --profile profile.json --out runs/investigation
-node dist/cli.js browser-check --scope scope.json --config browser.json --out runs/browser-proof
+node dist/cli.js check graphql --scope scope.json --config graphql.json --out runs/graphql-proof
+node dist/cli.js export-submission runs/graphql-proof --platform hackerone --out runs/h1-draft.md
 ```
 
 Contratos y condiciones de confirmación: [investigación y evidencia](docs/INVESTIGATION.md), [pruebas de navegador](docs/BROWSER-CHECKS.md), [escenarios con login y rotación](docs/SCENARIOS.md) y [modelo persistente](docs/database.md). El agente prepara los perfiles; no se infieren privacidad, propiedad o roles por nombres de campos.
@@ -37,7 +38,7 @@ La salida debe ser nueva. Copia instrucciones, referencias y metadata de UI; `ru
 
 Para una instalación de este mismo paquete, `node dist/cli.js update-skill --out <carpeta-existente>` actualiza los recursos administrados y conserva un backup en `.bba-backups/`. Valida el vínculo al paquete, rechaza enlaces en recursos y conserva archivos ajenos. `installation.json` registra hashes de los archivos administrados; una actualización interrumpida no se presenta como completa.
 
-Para **Claude Code**, `powershell -File scripts/package-claude-code.ps1` genera un ZIP portable con `SKILL.md`, el CLI compilado y `playwright-core`. Esa variante usa `disable-model-invocation: true`: se activa solo con `/bug-bounty-anything`, sin modificar la revisión de seguridad de Claude. Descomprimí su carpeta `bug-bounty-anything` dentro de `.claude/skills/` del proyecto o `~/.claude/skills/`; seguí `INSTALL-CLAUDE-CODE.md` dentro del ZIP para registrar el MCP local. El registro inicial expone solo herramientas offline. Chromium se instala aparte si necesitás pruebas de navegador.
+Para **Claude Code, Codex o Gemini CLI**, `npm run package:skill -- --out dist-skill.zip` (multiplataforma en TypeScript sin dependencias externas) genera un ZIP portable con `SKILL.md`, el CLI compilado y referencias. También sigue disponible `powershell -File scripts/package-claude-code.ps1` en Windows. Descomprimí `bug-bounty-anything` en `.claude/skills/` o `~/.claude/skills/`; el registro MCP inicial expone únicamente herramientas offline. Chromium se instala aparte si necesitás pruebas de navegador.
 
 Invocación: **`$bug-bounty-anything investigá https://servicio-autorizado/ y prepará los hallazgos`**. El agente busca la política vigente, genera los archivos necesarios y ejecuta los bloques cubiertos por el permiso. Solo pide datos que no puede resolver, como cuentas de prueba o una regla de acceso. La falta de autorización frena las pruebas activas sobre ese activo; la investigación pública puede continuar. La skill usa CLI sin exigir MCP y deriva artefactos cliente a REA cuando corresponde.
 
@@ -51,9 +52,9 @@ Genera `scope.json`, un `plan.json` GET anónimo a la semilla, `case.json` con c
 
 ## Requisitos y ejecución
 
-- Node.js **26 o posterior**, con npm. Se probó con Node 26.12.0 en Windows.
-- TypeScript y SQLite provistos por Node. Única dependencia: `playwright-core` 1.64.1 (Apache-2.0), para captura, inspección de páginas y pruebas de navegador. Para usarlo: `npm install` y `npx playwright-core install --only-shell chromium` (descarga el navegador y componentes auxiliares a `%LOCALAPPDATA%\ms-playwright`, fuera del repo). Los demás comandos no necesitan Chromium.
-- El sistema debe permitir conexiones a `127.0.0.1`. Algunos sandboxes bloquean incluso loopback; en ese caso ejecutá los comandos desde una terminal local habilitada. No desactives controles del sistema ni cambies los destinos para sortear el bloqueo.
+- Node.js **22.13.0 o posterior** (incluidos Node 22 LTS, 24 y 26), con npm.
+- TypeScript (strip-types nativo en desarrollo y JS compilado en `dist/`) y SQLite (`node:sqlite`) provistos por Node. Única dependencia de producción: `playwright-core` 1.64.1 (Apache-2.0), para captura, inspección de páginas y pruebas de navegador. Para usarlo: `npm install` y `npx playwright-core install --only-shell chromium` (descarga el navegador a `%LOCALAPPDATA%\ms-playwright` o `~/.cache/ms-playwright`, fuera del repo). Los demás comandos no necesitan Chromium.
+- El sistema debe permitir conexiones a `127.0.0.1` para laboratorios locales y el inspector UI. Algunos sandboxes bloquean loopback; en ese caso ejecutá los comandos desde una terminal local habilitada sin desactivar controles del sistema.
 
 Desde la raíz del proyecto:
 
@@ -91,18 +92,18 @@ npm run bba -- report-run runs/investigation --out runs/investigation-report.md
 
 Ctrl+C cancela la ejecución y guarda lo conocido. `resume` conserva presupuesto y evidencias, requiere el mismo scope vigente y sigue solo pasos no iniciados. Una solicitud iniciada cuyo resultado se perdió queda inconclusa y nunca se reintenta automáticamente. Las detenciones por límites o errores requieren revisar la causa y una nueva investigación; no se reinician con `resume`.
 
-## Importar superficie
+## Importar superficie y políticas
 
 ```powershell
-npm run bba -- import-surface --format har|openapi|rea --input capture.json --out runs/surface.json
+npm run bba -- import-surface --format har|openapi|rea|graphql|js-bundle --input source.json --out runs/surface.json [--quarantine]
+npm run bba -- import-policy --format hackerone|bugcrowd|intigriti|security-txt --input policy.json --out runs/policy-draft
 ```
 
-Proyecta un inventario de endpoints desde un HAR 1.2, Swagger 2.0 u OpenAPI 3.0/3.1 en JSON, o la Evidence de `inspect_web_network_capture` de REA. Es **offline**: no contacta URLs ni convierte el inventario en scope o autorización. La salida es un archivo nuevo con checksum.
+Proyecta un inventario de endpoints desde HAR 1.2, Swagger 2.0 / OpenAPI 3.0/3.1 JSON, Evidence de REA, introspección/SDL de GraphQL o bundles JS / SourceMap v3. Es **offline**: no contacta URLs ni convierte el inventario en autorización. Con `--quarantine`, omite y contabiliza entradas irrepresenables en lugar de abortar todo el lote.
 
-- Cada entrada distingue `observed` (HAR/REA) de `declared` (Swagger/OpenAPI) y conserva su ubicación en el origen (`locator`, y `ordinal`/`evidence_id` para REA).
-- Se descartan headers, cuerpos, valores de query, ejemplos y descripciones. Segmentos numéricos, UUID o largos pasan a `{opaque}`; nombres y segmentos literales pueden seguir siendo sensibles.
-- `credential-present` solo indica que la captura tenía `Authorization`/`Cookie`; no prueba sesión, rol ni tenant válidos.
-- Se rechaza todo el archivo ante rutas ambiguas o con escapes, credenciales en la URL, refs externas o cíclicas, variables de server de OpenAPI 3, YAML, versiones de Swagger distintas de 2.0 y nombres de parámetro fuera de `[A-Za-z0-9_.-]` (por ejemplo `filter[a]`).
+- Cada entrada distingue `observed` (HAR/REA) de `declared` (Swagger/OpenAPI/GraphQL/JS) y conserva su ubicación en el origen (`locator`, y `ordinal`/`evidence_id` para REA).
+- Se descartan headers, cuerpos, valores de query, ejemplos y descripciones. Segmentos numéricos, UUID o largos pasan a `{opaque}`; rutas con caracteres RFC 3986 (`:` y `@` en path) y nombres de query con corchetes (`filter[id]`) se admiten sin relajar el bloqueo de escapes ambiguos (`%2E`, `%2F`, `%5C`).
+- `import-policy` extrae activos HTTPS exactos hacia `scope.draft.json` (con soporte de `pathPrefixes` y plantillas `{param}` en `scope.json`) y aísla dominios comodín (`*.example.com`) en `manualReviewWildcards` sin expandirlos nunca de forma implícita.
 
 ## Capturar superficie con navegador
 
@@ -176,23 +177,37 @@ El conjunto está congelado por un digest de ids, grupos y resultados esperados 
 npm install
 npm run build
 npm pack
-npm install -g ./bug-bounty-anything-1.9.0.tgz
+npm install -g ./bug-bounty-anything-2.0.0.tgz
 npx playwright-core install --only-shell chromium
 bba doctor
 ```
 
-El paquete instalado es JavaScript compilado en `dist/` (Node no quita tipos de archivos dentro de `node_modules`) y expone el comando `bba`, equivalente a `npm run bba --`. Se verificó empaquetando e instalando el tarball en una carpeta aparte; el navegador se descarga aparte con el comando anterior.
+El paquete instalado es JavaScript compilado en `dist/` y expone el comando `bba` (incluidos subcomandos jerárquicos `bba campaign ...`, `bba check ...`, `bba study ...`, ayuda puntual `<comando> --help` e idioma `--lang es|en`).
 
-`bba doctor` hace solo comprobaciones locales y no contacta ningún host: versión de Node, SQLite, loopback, carpeta temporal, lanzamiento de Chromium con el aislamiento y los **nombres** (no los valores) de las variables `BBA_TOKEN_*` / `BBA_COOKIE_*` / `BBA_HEADER_*` / `BBA_INPUT_*` / `BBA_BODY_*` presentes. Sale con código 1 si falla algo. Un navegador faltante afecta captura y pruebas de navegador; se puede continuar con los otros comandos.
+`bba doctor` hace solo comprobaciones locales y no contacta ningún host: versión de Node (`>=22.13`), SQLite, loopback, carpeta temporal, lanzamiento de Chromium con aislamiento WebRTC reforzado y los **nombres** (nunca los valores) de las variables `BBA_TOKEN_*` / `BBA_COOKIE_*` / `BBA_HEADER_*` / `BBA_INPUT_*` / `BBA_BODY_*` presentes.
 
 ```powershell
 bba mcp --root C:/ruta/al/workspace            # solo herramientas offline
 bba mcp --root C:/ruta/al/workspace --allow-network
 ```
 
-Servidor MCP por stdio (JSON-RPC, escrito sin dependencias de protocolo: `initialize`, `ping` y `tools`). `tools/list` es el inventario real: incluye capacidades, preparación, planificación, importación, inspección de sesión/presupuesto, evaluación, páginas de evidencia, comparación y exportación offline. **Las herramientas activas, incluidas `study_run` y `resume_study`, envían requests y solo existen con `--allow-network`.** Todos los paths se resuelven dentro de `--root`; salidas fuera de ahí y escapes mediante enlaces se rechazan. Credenciales e inputs se leen del entorno del proceso, no de argumentos. Los límites y el scope son declaraciones del operador; revisá quién puede modificarlos antes de habilitar red. La [guía de conexión](references/connection-and-recovery.md) cubre instalación, actualización y recuperación.
+Servidor MCP por stdio (JSON-RPC sin dependencias externas: `initialize`, `ping` fuera de banda, cancelación real `notifications/cancelled` con `AbortSignal` y `tools`). `tools/list` es el inventario autoritativo; las herramientas activas solo existen con `--allow-network`. Todos los paths se confinan dentro de `--root` en Windows y POSIX; salidas fuera de raíz y escapes por enlaces simbólicos o junctions se rechazan, y los errores internos se sanitizan mediante `SafeError`.
 
-Para conectar el MCP a Codex: `node dist/cli.js setup-mcp --root <workspace>` muestra el registro previsto sin modificar la configuración; agregá `--apply` para registrarlo con la CLI de Codex y conservar un backup. Arranca con herramientas offline. `--allow-network` expone las herramientas activas; si ya existe `bba`, usá `--replace` para revisar y aplicar el cambio de modo con otro backup. Cada ejecución igualmente exige scope vigente y límites exactos. Reiniciá o reconectá Codex para descubrir el servidor. `inspect-web-page` genera `pages.json` junto a la captura: links y scripts del mismo origen, acciones/métodos/nombres de campos de formularios, con consultas y valores descartados. Esos caminos son indicios; no se visitan por aparecer en el DOM. `page-view` verifica ese archivo offline.
+Para conectar el MCP a Codex, Claude Code o Gemini CLI: `node dist/cli.js setup-mcp --root <workspace> --client codex|claude|gemini [--apply] [--allow-network] [--replace]` muestra o aplica el registro preservando backups locales.
+
+## Firma criptográfica, exportación a plataformas e inspector local
+
+```powershell
+bba keygen --out keys/operator
+bba sign-evidence runs/investigation --key keys/operator/bba-ed25519.key.pem
+bba verify-signature runs/investigation --pub keys/operator/bba-ed25519.pub.pem
+bba export-submission runs/investigation --platform hackerone|bugcrowd|ghsa --out runs/submission.md
+bba ui runs/investigation --out runs/inspector.html
+```
+
+- `sign-evidence` y `verify-signature` firman y verifican archivos o directorios completos con claves asimétricas Ed25519 (`node:crypto`), detectando cualquier modificación, agregado o borrado posterior más allá de un simple hash SHA-256.
+- `export-submission` genera borradores Markdown para HackerOne, Bugcrowd o GitHub Security Advisories con comandos `curl` redactados (`$BBA_TOKEN_*`, `$BBA_COOKIE_*`) y cálculo conservador CVSS v3.1 / v4.0 solo cuando el hallazgo está `confirmed`.
+- `ui` levanta un panel local de solo lectura enlazado exclusivamente a `127.0.0.1` con CSP estricta (`default-src 'none'`) o exporta un HTML autónomo sin JavaScript ni recursos externos.
 
 Para investigar por fases, `campaign-open` crea un expediente sin red, `campaign-link` asocia el scope y una revisión documentada de la política, y `campaign-status` verifica integridad, presupuesto y bloqueos. Con la red habilitada, `campaign-capture` inspecciona una vez la URL exacta, `campaign-execute` ejecuta el perfil semántico actual con cuentas controladas y deja un borrador, y `campaign-resume` continúa una ejecución pausada sin repetir pasos registrados. Los comandos MCP equivalentes usan guiones bajos. Ver [flujo de campaña](docs/CAMPAIGNS.md) para contratos, límites y recuperación tras interrupción.
 
@@ -246,7 +261,7 @@ Estos son los límites fijos de `lab`. En `run/resume` se definen en el scope y 
 
 `npm test` usa `node:test` y servidores HTTP locales reales. Cubre ambas variantes, controles inconclusos, aislamiento, límites, secretos, scope, checkpoints, integridad y CLI. Incluye cancelar una solicitud y matar un proceso hijo durante otra para verificar recuperación sin repetirla. Los tests crean carpetas temporales propias y las eliminan al finalizar. La selección de DNS público se prueba con respuestas de un resolver controlado; no se contactaron servicios productivos.
 
-`npm run check` ejecuta TypeScript estricto sobre `src/` y `scripts/`, sin emitir JS. Las versiones de TypeScript y tipos de Node están fijadas como dependencias de desarrollo. `npm run verify` combina check, build y tests; requiere Chromium para verificar todas las pruebas. Node elimina tipos al ejecutar y los contratos se validan también en runtime. No hay un proveedor CI ni linter configurados.
+`npm run check` ejecuta TypeScript estricto sobre `src/` y `scripts/`, sin emitir JS. `npm run verify` combina `check`, `build` y `test` completo, y cuenta con workflow de CI multiplataforma (`.github/workflows/ci.yml` en Ubuntu y Windows sobre Node 22.13 y 24).
 
 Códigos de salida: `0` completo (en `lab`, incluso si encontró vulnerabilidades); `1` error o ejecución detenida; `2` argumentos inválidos; `3` ejecución parcial terminada con resultados inconclusos; `130` cancelación. Un `0` no significa ausencia de vulnerabilidades: consultá los estados del resultado.
 
