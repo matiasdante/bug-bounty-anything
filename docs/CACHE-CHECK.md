@@ -1,27 +1,9 @@
-# Exposición correlacionada con cache (1.9.0)
+# Cache-correlated cross-identity exposure (1.9.0)
 
-**Español** · [English](CACHE-CHECK.en.md)
+**English** · [Español](es/CACHE-CHECK.md) · [Português (Brasil)](pt-BR/CACHE-CHECK.md) · [简体中文](zh/CACHE-CHECK.md)
 
-`cache-check` / `cache_check` ejecuta siete GET exactos contra un recurso propio
-con dos cuentas controladas. El config lleva `schemaVersion: 1`,
-`class: "cross-identity-cache"`, `policyReference`, `identityUrl`,
-`identityPointer`, `resourceUrl`, `protectedPointer`, `accountA`, `accountB`,
-`bustQueryName` y dos `bustTokens` opacos distintos. Las cuentas se referencian
-por `BBA_TOKEN_*` o `BBA_COOKIE_*`; los valores no entran en la configuración.
-El scope debe permitir ambas rutas, el nombre de query y al menos siete requests.
+`cache-check` / `cache_check` sends seven exact GET requests to a resource you own with two controlled accounts. Configuration requires `schemaVersion: 1`, `class: "cross-identity-cache"`, `policyReference`, `identityUrl`, `identityPointer`, `resourceUrl`, `protectedPointer`, `accountA`, `accountB`, `bustQueryName`, and two distinct opaque `bustTokens`. Account values come from `BBA_TOKEN_*` or `BBA_COOKIE_*` environment variables, never the config. Scope must allow both routes, the query name, and at least seven requests.
 
-El recorrido establece identidades distintas y denegación anónima, confirma que
-A puede leer el dato protegido con un parámetro de cache busting y B no puede,
-precalienta la URL sin parámetro con A y la lee con B. `confirmed` exige que B
-reciba el mismo campo protegido de A en esa URL compartida. `not-reproduced`
-exige que B sea denegado. Controles incompletos o una lectura de B también con
-cache busting quedan `unresolved`, pues allí la causa puede ser autorización
-general y no cache. `resume-cache-check` / `resume_cache_check` conserva el
-mismo scope, cuentas, config y presupuesto sin repetir reservas inciertas.
+The check establishes distinct identities and anonymous denial. It verifies that A can read the protected field with a cache-busting parameter and B cannot, warms the shared URL without that parameter as A, then reads it as B. `confirmed` requires B to receive A's protected field at the shared URL; `not-reproduced` requires B to be denied. Incomplete controls or B also reading the field with cache busting are `unresolved`, since general authorization failure may explain the result. `resume-cache-check` / `resume_cache_check` retains scope, accounts, config, and budget without repeating uncertain reservations.
 
-El operador debe comprobar que los tokens de busting son semánticamente
-inertes, que las cuentas no comparten permisos y que el recurso es suyo. El
-resultado demuestra una exposición **correlacionada** con cache; no atribuye
-con certeza la capa, el algoritmo de clave ni otras rutas. Solo se guardan
-hechos proyectados y digests, nunca el valor protegido. El borrador responde
-las cinco preguntas del reporte y limita el impacto al campo comprobado.
+The operator must verify that busting tokens have no semantic effect, the accounts do not share permission, and the resource belongs to them. This shows exposure **correlated** with caching; it does not identify the cache layer or key algorithm or establish other affected routes. Only projected facts and digests are retained, never the protected value. The five-section draft limits impact to the checked field.

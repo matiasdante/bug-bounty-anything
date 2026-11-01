@@ -1,10 +1,10 @@
-# Persistencia implementada
+# Implemented persistence
 
-**Español** · [English](database.en.md)
+**English** · [Español](es/database.md) · [Português (Brasil)](pt-BR/database.md) · [简体中文](zh/database.md)
 
-Cada ejecución estática tiene `session.sqlite` y `execution-lock.sqlite`. Cada presupuesto compartido tiene `budget.sqlite` y `lock.sqlite`. Las tablas `owner` permanecen vacías: una transacción `BEGIN IMMEDIATE` mantiene el lock del proceso y el sistema operativo lo libera al morir.
+Each static run has `session.sqlite` and `execution-lock.sqlite`. Each shared budget has `budget.sqlite` and `lock.sqlite`. The `owner` tables remain empty: a `BEGIN IMMEDIATE` transaction holds the process lock, released by the operating system when the process dies.
 
-Los nombres del diagrama identifican archivo y tabla; no son tablas adicionales. No hay claves foráneas SQL entre archivos. Las referencias `sessionId:stepId` de los eventos y los hechos seleccionados viven dentro del JSON de `body` y se validan en la aplicación.
+Diagram names identify both file and table; they are not additional tables. There are no SQL foreign keys across files. Event and selected-fact references such as `sessionId:stepId` live in `body` JSON and are validated by the application.
 
 ```mermaid
 erDiagram
@@ -28,6 +28,4 @@ erDiagram
     }
 ```
 
-`session_checkpoints` representa `session.sqlite/checkpoints`: snapshots inmutables de scope/plan, intentos, bindings de inputs/presupuesto y hechos JSON redactados. `budget_events` representa `budget.sqlite/events`: inicio con digests de autorización/límites y eventos append-only `reserve`/`finish`. Las cadenas de hashes detectan corrupción, sin autenticar al operador ni impedir que alguien con acceso de escritura reescriba un historial completo.
-
-Fuentes: `src/session.ts` y `src/budget.ts`. El modelo se contrastó con las sentencias CREATE TABLE y pruebas de locks, corrupción y muerte de proceso. No hay un parser Mermaid local instalado; la sintaxis se revisó manualmente.
+`session_checkpoints` means `session.sqlite/checkpoints`: immutable scope/plan snapshots, attempts, input/budget bindings, and redacted JSON facts. `budget_events` means `budget.sqlite/events`: initial authorization/limit digests and append-only `reserve`/`finish` events. Hash chains detect corruption but neither authenticate the operator nor stop a writer from replacing an entire history. Sources: `src/session.ts` and `src/budget.ts`. The model was checked against `CREATE TABLE` statements and lock, corruption, and process-death tests. Mermaid syntax was reviewed manually; no local Mermaid parser was installed.

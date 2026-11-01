@@ -1,43 +1,16 @@
-# Integridad de JWT firmado
+# Signed JWT integrity
 
-**Español** · [English](JWT-INTEGRITY.en.md)
+**English** · [Español](es/JWT-INTEGRITY.md) · [Português (Brasil)](pt-BR/JWT-INTEGRITY.md) · [简体中文](zh/JWT-INTEGRITY.md)
 
-Este bloque responde una pregunta acotada: ¿el servicio acepta un JWT de una
-cuenta de prueba propia después de cambiar su payload **sin volver a firmarlo**?
-Un resultado positivo demuestra que esa ruta aceptó un token cuya firma ya no
-corresponde al contenido. No acredita acceso a identidades ajenas, permisos de
-administrador ni alcance sobre otros datos.
+This check answers a narrow question: does a service accept a JWT from a test account you own after its payload changes **without a new signature**? A positive result proves that route accepted a token whose signature does not match its contents. It does not prove access to another identity, administrator privileges, or other data.
 
-## Cómo llega la skill a esta hipótesis
+## How the skill reaches this hypothesis
 
-En el [caso Titan](https://blog.faav.net/how-i-couldve-accessed-17-trillion-microsoft-records),
-el investigador encontró una API separada de un frontend restringido, leyó su
-Swagger público, usó configuración archivada como pista histórica y observó que
-distintas mutaciones de claims avanzaban por las validaciones sin cambiar la
-firma. Finalmente confirmó el efecto con una consulta mínima; el volumen total
-fue una **estimación de metadatos**, no un volcado de registros.
+The published [Titan case](https://blog.faav.net/how-i-couldve-accessed-17-trillion-microsoft-records) combined a separate API, public Swagger, archived configuration clues, claim mutations, and a minimal confirming query. Its total record count was estimated from metadata, not a data dump. BBA distinguishes declared routes in offline OpenAPI/Swagger, potentially stale historical clues, current in-scope observations, and confirmation: denied anonymous control, stable valid token, and altered token accepted for a protected fact on your own account. A VPN frontend does not establish API controls or authorize discovered hosts. Review policy for each host, technique, method, and resource. Validation errors are clues, never proof by themselves.
 
-Para investigar una cadena similar, BBA distingue cuatro estados de evidencia:
+## Contract
 
-1. **Declarado:** ruta y esquema en OpenAPI/Swagger importado offline.
-2. **Histórico:** valores o endpoints en archivos públicos; pueden haber caducado.
-3. **Observado:** respuesta actual a una solicitud dentro del alcance vigente.
-4. **Confirmado:** control anónimo denegado, token válido estable y token alterado
-   aceptado para un hecho protegido de la cuenta propia.
-
-Una página de VPN en el frontend no implica que la API tenga el mismo control.
-Tampoco convierte los hosts descubiertos en objetivos autorizados. Revisá la
-política para **cada** host, técnica, método y recurso antes de enviar tráfico.
-Importá Swagger 2.0 en JSON con `import-surface --format openapi`; sus rutas son candidatos,
-no requests ejecutables. Los errores de validación son pistas para formular una
-hipótesis; un error distinto, por sí solo, no confirma un bypass.
-
-## Contrato
-
-Ejemplo de una ruta de consulta **del laboratorio o de un activo autorizado**.
-El cuerpo debe ser inocuo y devolver únicamente un hecho propio, como un valor
-escalar de prueba. Los secretos y el cuerpo se suministran por variables de
-entorno; el archivo no contiene sus valores.
+Use an authorized route and a harmless query returning only a private fact belonging to your test account. Body and secrets come from environment variables:
 
 ```json
 {
@@ -52,65 +25,37 @@ entorno; el archivo no contiene sus valores.
 }
 ```
 
-La configuración también acepta `"mutation": {"claim":"claim_name",
-"mode":"replace","valueEnv":"BBA_INPUT_OWN_VALUE"}` para un valor controlado
-por el investigador. Debe ser un claim existente y cambiar su valor. No uses
-identidades ajenas, usuarios adivinados ni roles privilegiados que no controles.
-`add-canary` incorpora un claim nuevo con un valor determinista derivado del
-token original; no cambia la firma. En ambos modos, el token original debe ser
-un JWT compacto firmado de tres partes; se rechaza `alg: none` como punto de
-partida.
+`replace` may instead change an existing claim using `valueEnv: "BBA_INPUT_OWN_VALUE"`. Use only values and identities you control, not guessed users or privileged roles. `add-canary` adds a deterministic claim derived from the original token. Neither mode changes the signature. The starting token must be a signed, compact three-part JWT; `alg: none` is rejected as input. Scope must permit the exact URL and a POST `requestRule` with JSON format. State-changing routes require policy coverage and disposable resources. `proofPointer` selects a harmless, nonpublic JSON fact. Only presence, type, significance, and SHA-256 are saved; low-entropy values may be guessed from a hash.
 
-El `scope.json` debe permitir la URL exacta y, para POST, una `requestRule` que
-autorice ese método y el formato `json`. Si la ruta hace cambios, la política
-debe cubrir esa acción y se requieren recursos descartables. `proofPointer` es
-un JSON Pointer hacia un valor no público pero inocuo de la cuenta de prueba.
-El cuerpo bruto no se guarda: se conserva tipo, presencia, significado y SHA-256.
-Un valor de poca entropía puede deducirse a partir de su hash.
-
-## Ejecución y lectura
+## Run and interpret
 
 ```powershell
-$env:BBA_TOKEN_OWNED = '<JWT firmado de cuenta de prueba propia>'
+$env:BBA_TOKEN_OWNED = '<signed JWT of your own test account>'
 $env:BBA_BODY_QUERY = '{"query":"SELECT 1","tableName":"OwnedTestData","rowLimit":1}'
 node dist/cli.js jwt-check --scope scope.json --config jwt-check.json --out runs/jwt-check
 node dist/cli.js evaluate-jwt runs/jwt-check/run --config jwt-check.json --out runs/jwt-evaluation.json
 ```
 
-El ejemplo SQL ilustra una consulta **sobre datos de prueba propios**. No es
-una invitación a consultar metadatos, tablas de clientes o un servicio real sin
-permiso concreto. El agente debe elegir el menor request que revele un hecho
-protegido y no reiterar la consulta después de confirmarlo.
+The SQL string illustrates a query against **owned test data**, not permission to query customer tables or production metadata. Choose the smallest request showing the protected fact; stop after confirmation. The engine sends exactly four requests to one endpoint with one body: anonymous, original JWT, altered JWT, original JWT again. It follows no redirects. Shared budget accounts for all attempts and intervals; 429/5xx stop the flow. Tokens stay in memory. Output stores salted token/mutation bindings, a credential-free plan, SQLite checkpoints, `result.json`, and a draft `report.md`. `evaluate-jwt` can also produce Markdown.
 
-El motor envía exactamente cuatro requests al mismo endpoint y con el mismo
-cuerpo: anónimo, JWT original, JWT alterado y JWT original otra vez. No sigue
-redirects. El presupuesto compartido del scope contabiliza los cuatro intentos
-y sus intervalos; 429/5xx detienen el flujo. Los JWT viven solo en memoria. La
-carpeta guarda bindings salados del token original y de la mutación, el plan sin credenciales,
-checkpoints SQLite, `result.json` y el borrador `report.md` cuando terminan los
-cuatro pasos. `evaluate-jwt` también acepta un archivo de salida `.md`.
+```mermaid
+sequenceDiagram
+    participant B as BBA
+    participant S as Service
+    B->>S: 1. anonymous request
+    S-->>B: 401 / 403 / 404 expected
+    B->>S: 2. original JWT
+    S-->>B: 200 + protected fact
+    B->>S: 3. altered claim, old signature
+    S-->>B: 200 + same fact means confirmed
+    B->>S: 4. original JWT again
+    S-->>B: 200 + same fact (stable control)
+```
 
-`confirmed` requiere anónimo 401/403/404, ambos controles válidos 200 con el
-mismo hecho protegido significativo, y 200 con ese mismo hecho para el token
-alterado. `not-reproduced` significa que esta mutación fue denegada mientras
-el token original seguía válido. Cualquier control ausente, respuesta distinta
-o hecho no interpretable queda `unresolved`.
-
-Una interrupción se retoma únicamente con el **mismo token original**, scope,
-configuración y presupuesto canónico:
+`confirmed` requires anonymous 401/403/404, two valid-token 200 controls with the same meaningful protected fact, and altered-token 200 with that fact. `not-reproduced` means this mutation was denied while the original stayed valid. Missing controls, different responses, or unreadable facts are `unresolved`. Resume requires the **same original token**, scope, config, and canonical budget:
 
 ```powershell
 node dist/cli.js resume-jwt runs/jwt-check --scope scope.json --config jwt-check.json
 ```
 
-El motor no repite reservas inciertas. Si el proceso murió luego de enviar un
-request y antes de registrar la respuesta, esa comparación queda inconclusa;
-creá otra investigación dentro del presupuesto vigente si la política y la
-ventana todavía lo permiten. `evaluate-jwt` es offline y puede volver a
-evaluar la evidencia existente sin enviar requests.
-
-El reporte debe expresar el impacto observado en esa cuenta y ruta. Escalar
-desde allí a otro usuario, roles o inventarios de datos exige autorización y
-una nueva hipótesis con controles propios. No enumeres registros para inflar
-una estimación: los metadatos agregados y las muestras acotadas se documentan
-como tales, con sus supuestos.
+Uncertain reservations are never repeated. If a response was lost after sending, that comparison remains inconclusive; a new case needs remaining budget and current authorization. `evaluate-jwt` is offline. Report only the observed account and route. Claims about other users, roles, or inventories require new authorization and controls. Document aggregate estimates and bounded samples as such; do not enumerate data to inflate impact.

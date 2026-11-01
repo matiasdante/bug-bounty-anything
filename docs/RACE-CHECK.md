@@ -1,29 +1,9 @@
-# Carrera de operación de uso único (1.9.0)
+# Single-use operation race (1.9.0)
 
-**Español** · [English](RACE-CHECK.en.md)
+**English** · [Español](es/RACE-CHECK.md) · [Português (Brasil)](pt-BR/RACE-CHECK.md) · [简体中文](zh/RACE-CHECK.md)
 
-`race-check` / `race_check` prueba una sola regla de uso único sobre **dos
-recursos descartables propios**. El config incluye `schemaVersion: 1`,
-`class: "single-use-race"`, `policyReference`, `credentialEnv`, `actionUrl`,
-`actionField`, `controlResourceId`, `raceResourceId`, `controlStateUrl`,
-`raceStateUrl` y `countPointer`. Las tres URLs deben estar en el mismo origen,
-ser exactas y distintas. El scope debe permitir JSON POST sobre `actionUrl`,
-GET sobre ambos estados, al menos siete requests y `minIntervalMs: 0`. El
-token/cookie se lee de `BBA_TOKEN_*` / `BBA_COOKIE_*` en el entorno.
+`race-check` / `race_check` tests one single-use rule on **two disposable resources you own**. Config includes `schemaVersion: 1`, `class: "single-use-race"`, `policyReference`, `credentialEnv`, `actionUrl`, `actionField`, `controlResourceId`, `raceResourceId`, `controlStateUrl`, `raceStateUrl`, and `countPointer`. The three URLs must be exact, distinct, and on one origin. Scope needs JSON POST to `actionUrl`, GET to both state URLs, at least seven requests, and `minIntervalMs: 0`. Credentials are read from `BBA_TOKEN_*` or `BBA_COOKIE_*`.
 
-El motor verifica contador inicial cero, ejecuta la acción dos veces en el
-recurso de control y exige que el segundo uso sea rechazado. Si falla ese
-control, **no ejecuta la carrera**. En el segundo recurso verifica contador
-cero, reserva dos requests del presupuesto compartido en una pareja y envía
-exactamente dos POST simultáneos. Confirma solo si ambos fueron aceptados,
-las ventanas de envío se solaparon y el contador final es dos. Una sola
-aceptación con contador final uno y ventanas solapadas queda `not-reproduced`; lo demás es
-`unresolved`. La variante vulnerable y la corregida están probadas con
-servidores loopback sintéticos.
+The engine checks an initial count of zero, performs the action twice on the control resource, and requires rejection of the second use. If that control fails, **no race is run**. For the second resource it checks zero count, reserves two requests from the shared budget as a pair, and sends exactly two concurrent POSTs. `confirmed` requires both accepted, overlapping send windows, and final count two. One acceptance, final count one, and overlapping windows yield `not-reproduced`; all other cases are `unresolved`. Vulnerable and fixed variants are tested on synthetic loopback servers.
 
-El journal se sella con `artifact.json` y se consulta con `artifact-view`.
-Una caída deja reservas inciertas y este check no reanuda ni repite acciones
-de estado. El operador debe crear, controlar y limpiar ambos recursos y
-establecer que la regla realmente es uso único. Un doble efecto local no
-demuestra impacto financiero ni otras rutas. El reporte trae las cinco
-preguntas y evidencia de estado, sin guardar credenciales ni cuerpos.
+`artifact.json` seals the journal for `artifact-view`. A crash leaves uncertain reservations; this check never resumes or repeats state-changing actions. The operator must own, control, and clean up both resources and establish the single-use rule. A local double effect does not demonstrate financial impact or other affected routes. The report includes five sections and state evidence without credentials or bodies.

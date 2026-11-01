@@ -1,47 +1,17 @@
-# Pruebas acotadas de entrada (1.9.0)
+# Bounded input checks (1.9.0)
 
-**Español** · [English](INPUT-PROOFS.en.md)
+**English** · [Español](es/INPUT-PROOFS.md) · [Português (Brasil)](pt-BR/INPUT-PROOFS.md) · [简体中文](zh/INPUT-PROOFS.md)
 
-Estas dos herramientas reutilizan el scope exacto, `requestRules`, el presupuesto
-compartido y los checkpoints SQLite. Sus entradas se generan o ligan al config;
-las credenciales salen del entorno. Una ejecución incompleta conserva las
-reservas y solo puede retomar pasos no iniciados con el mismo scope/config.
+Both tools reuse exact scope, `requestRules`, shared budget, and SQLite checkpoints. Inputs are generated or bound to config; credentials come from the environment. An incomplete run retains reservations and can resume only unstarted steps with the same scope/config.
 
-## Expresión de plantilla
+## Template expression
 
-`template-check` / `template_check` recibe un config JSON con
-`schemaVersion: 1`, `class: "template-arithmetic"`, `policyReference`, `url`,
-`parameter`, `pointer`, `operands: [a,b,c]` y `credentialEnv` (`null` o una
-referencia `BBA_TOKEN_*` / `BBA_COOKIE_*`). Los operandos son enteros distintos
-entre 2 y 997. El scope debe autorizar el GET exacto y ese nombre de query.
+`template-check` / `template_check` takes `schemaVersion: 1`, `class: "template-arithmetic"`, `policyReference`, `url`, `parameter`, `pointer`, `operands: [a,b,c]`, and `credentialEnv` (`null` or a `BBA_TOKEN_*` / `BBA_COOKIE_*` reference). Operands are distinct integers from 2 through 997. Scope must authorize the exact GET and query name. The engine sends literal `a*b`, `{{a*b}}`, and `{{b*c}}` to one resource, projects one JSON field, and stores digests only. It confirms **evaluation of this syntax** when the control remains literal and both expressions return their products. If both remain literal, the result is `not-reproduced`; other outcomes are `unresolved`. The operator must establish that the field should have treated input as literal text. SQL, NoSQL, command execution, files, and third party data are not tested. `resume-template-check` / `resume_template_check` uses the same scope/config.
 
-El motor envía `a*b` literal, `{{a*b}}` y `{{b*c}}` al mismo recurso, proyecta
-un campo JSON y guarda solo sus digests. Confirma **evaluación de esa sintaxis**
-si el control permanece literal y ambas expresiones dan sus productos. Si ambas
-permanecen literales, marca `not-reproduced`; otros resultados quedan
-`unresolved`. El operador debe establecer que el campo debía tratar la entrada
-como texto literal. No se prueban SQL, NoSQL, comandos, archivos ni datos ajenos.
-`resume-template-check` / `resume_template_check` usa el mismo config y scope.
+## URL callback
 
-## Callback de URL
+`ssrf-callback-check` / `ssrf_callback_check` takes `schemaVersion: 1`, `class: "outbound-fetch"`, `policyReference`, `triggerUrl`, `queryName`, `credentialEnv`, `callbackUrl`, `receiptUrl`, and `receiptPointer`. Trigger, callback, and receipt must be exact scoped paths. The callback uses a separate origin you own and ends in an opaque token of at least 12 characters. Its receiver exposes a JSON boolean at `receiptPointer` that changes from `false` to `true` only after this callback.
 
-`ssrf-callback-check` / `ssrf_callback_check` recibe `schemaVersion: 1`,
-`class: "outbound-fetch"`, `policyReference`, `triggerUrl`, `queryName`,
-`credentialEnv`, `callbackUrl`, `receiptUrl` y `receiptPointer`. El trigger,
-callback y recibo deben ser rutas exactas declaradas en el scope. El callback
-debe estar en un origen propio distinto del trigger y terminar en un token opaco
-de al menos 12 caracteres. El receptor propio devuelve un JSON booleano en
-`receiptPointer` que pasa de `false` a `true` únicamente al recibir ese callback.
+The engine reads the receipt, sends the callback URL as a query value to the trigger, then polls the receipt at most twice. A `false` → `true` transition with trigger 200 demonstrates an outbound request to **that owned receiver**, assuming it is configured correctly and the declared policy forbids the destination. It does not prove internal network access, metadata access, or response disclosure. It never generates internal URLs, follows redirects, or sweeps destinations. `resume-ssrf-callback` / `resume_ssrf_callback` retains the limits.
 
-El motor consulta el recibo antes, envía el callback como valor de query al
-trigger y consulta el recibo hasta dos veces. Un cambio `false` → `true` con
-trigger 200 demuestra una salida hacia **ese receptor propio**, siempre que el
-receptor esté bien configurado y la política declarada prohíba ese destino.
-No prueba acceso a redes internas, metadatos ni divulgación de respuesta. No
-se generan URLs internas, no se siguen redirects y no hay barrido de destinos.
-`resume-ssrf-callback` / `resume_ssrf_callback` conserva los mismos límites.
-
-El callback que hace el servicio al receptor es un request adicional externo
-al contador del cliente BBA; el operador conserva el log de su receptor y debe
-considerarlo en el presupuesto del programa. Ambos reportes responden qué es,
-cómo se encontró, prueba, reproducción y corrección sin extrapolar severidad.
+The service's callback to the receiver is an additional request outside the BBA client's counter. Keep the receiver log and account for it in the program budget. Both reports cover what happened, discovery, proof, reproduction, and remediation without extrapolating severity.

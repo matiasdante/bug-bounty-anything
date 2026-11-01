@@ -1,10 +1,10 @@
-# Investigación desde superficie y evidencia semántica
+# Investigation from surface and semantic evidence
 
-**Español** · [English](INVESTIGATION.en.md)
+**English** · [Español](es/INVESTIGATION.md) · [Português (Brasil)](pt-BR/INVESTIGATION.md) · [简体中文](zh/INVESTIGATION.md)
 
-La skill prepara estos contratos a partir del servicio, su documentación y la política vigente. El operador aporta cuentas controladas y reglas de negocio que no puedan comprobarse públicamente. Una importación o una regla escrita no demuestra autorización real.
+The skill prepares contracts from the service, documentation, and current policy. The operator supplies controlled accounts and business rules that cannot be checked publicly. An import or written rule does not establish real authorization.
 
-## Recorrido
+## Workflow
 
 ```powershell
 node dist/cli.js capabilities
@@ -13,13 +13,24 @@ node dist/cli.js plan-investigation --scope scope.json --surface surface.json --
 node dist/cli.js investigate --scope scope.json --surface surface.json --profile profile.json --out runs/investigation
 ```
 
-`plan-investigation` es offline. `investigate` envía GET: verifica identidades, ejecuta control/baseline/sonda, evalúa los hechos y genera el reporte. Se detiene en la primera confirmación (`proof-complete`); las otras hipótesis quedan pendientes. Sin hipótesis representables, escribe cobertura y reporte sin enviar requests; la CLI sale con código 3.
+```mermaid
+flowchart TD
+    IN["scope + surface + profile"] --> PLAN["plan-investigation<br/>(offline)"]
+    PLAN --> ID["Read each account's identity"]
+    ID --> CTRL["Anonymous control"]
+    CTRL --> BASE["Baseline: owner reads resource"]
+    BASE --> PROBE["Probe: other account reads same resource"]
+    PROBE --> Q{"Declared rule violated<br/>with matching facts?"}
+    Q -->|yes| OK["confirmed<br/>proof-complete, stop"]
+    Q -->|valid denial| NR["not-reproduced"]
+    Q -->|controls fail, 401, bad JSON| UN["unresolved"]
+```
 
-La salida incluye scope, perfil, plan, checks, `coverage.json` con checksum/procedencia/digest de checks, `run/` con checkpoints, `semantic.json` y `report.md`. Una caída conserva las reservas SQLite. Usá `resume-investigation <carpeta-del-caso> --scope <scope-canónico> --out <reporte-nuevo.md>`: verifica definición y scope, vuelve a evaluar lo retenido y no envía nada si ya existe una prueba confirmada. Las reservas inciertas no se repiten. Una detención terminal por otra causa requiere revisar el error, el presupuesto y la necesidad de otra investigación.
+Planning is offline. `investigate` sends GET requests to verify identities, run control/baseline/probe, evaluate facts, and write a report. It stops at the first confirmation (`proof-complete`), leaving other hypotheses pending. With no representable hypothesis, it writes coverage and report without requests and exits 3. Output includes scope, profile, plan, checks, checksummed/provenance-aware `coverage.json`, checkpointed `run/`, `semantic.json`, and `report.md`. A crash retains SQLite reservations. `resume-investigation <case-dir> --scope <canonical-scope> --out <new-report.md>` verifies definitions and scope, reevaluates retained evidence, and sends nothing after confirmed proof. Uncertain reservations are not repeated. Other terminal stops require reviewing errors and budget before a new case.
 
-## Perfil
+## Profile
 
-Ejemplo estructural para dos cuentas propias y documentos privados. Los dominios y paths ilustran el contrato; no son objetivos a ejecutar:
+For two owned accounts and private documents, a structural example is:
 
 ```json
 {
@@ -46,28 +57,22 @@ Ejemplo estructural para dos cuentas propias y documentos privados. Los dominios
 }
 ```
 
-Las reglas se aplican por origen y prefijo de segmentos, dentro del scope exacto. No convierten todos los documentos en datos propios: los recursos deben ser de las cuentas controladas. Los endpoints con query necesitan referencias `{ name, valueEnv: "BBA_INPUT_..." }` y reglas de transporte que permitan esos nombres.
+Rules match origin and path-segment prefix within exact scope; they do not make every document yours. Resources must belong to controlled accounts. Query endpoints need `{ name, valueEnv: "BBA_INPUT_..." }` and transport rules for those names. Numeric/UUID historical URLs may become templates and are not executed as such. Optional `bindings: [{ entryId, url }]` ties an entry to a concrete owned-resource URL, validated against template and scope. Unknown origins, unsupported methods, missing rules, and insufficient budget are explicit coverage gaps.
 
-Una URL histórica con IDs numéricos/UUID puede haberse proyectado como template. El planificador la deja sin ejecutar. `bindings` opcional contiene `{ entryId, url }` para vincular un endpoint con una URL concreta de un recurso propio; valida el template y el scope. Los orígenes desconocidos, métodos sin generador, reglas faltantes y presupuestos insuficientes quedan explícitos en cobertura.
+## Confirmed classes
 
-## Clases confirmadas
-
-| Clase | Política | Hechos adicionales requeridos |
+| Class | Declared policy | Required server facts |
 |---|---|---|
-| `bola` | `owner-only`, `ownerFact` | El propietario del recurso coincide con la identidad del baseline |
-| `bfla` | `role-private`, `roleFact`, `baselineRole`, `probeRole` | Roles distintos retornados por el servidor y coincidentes con los roles requeridos |
-| `property-exposure` | Igual que BFLA | La propiedad privada seleccionada cruza esa frontera de roles |
-| `tenant-isolation` | `tenant-private`, `tenantFact`, `resourceTenantFact` | Tenants distintos retornados por el servidor; tenant del recurso igual al del baseline |
+| `bola` | `owner-only`, `ownerFact` | Resource owner equals baseline identity |
+| `bfla` | `role-private`, `roleFact`, `baselineRole`, `probeRole` | Distinct server-returned roles match declared roles |
+| `property-exposure` | Same as BFLA | Selected private property crosses the role boundary |
+| `tenant-isolation` | `tenant-private`, `tenantFact`, `resourceTenantFact` | Distinct server-returned tenants; resource tenant equals baseline's |
 
-Para roles, agregá la proyección correspondiente al endpoint de identidad y usá `subjectPointer: null`. Para tenants, proyectá el tenant en identidad y configurá el selector del tenant del recurso. `protectedPointer` siempre identifica el dato que la regla prohíbe devolver a la cuenta restringida.
+For roles, project the fact from identity and use `subjectPointer: null`; for tenants, project both identity and resource tenant. `protectedPointer` identifies the field forbidden to the restricted account. Identities must be distinct, of the same type, obtained before comparison with the credentials later used for baseline/probe. Identity and resource endpoints share an origin. Anonymous control must be denied and baseline must return meaningful protected data. Probe confirmation requires that same data and ownership/role/tenant controls. Compare selected fields, not whole bodies that may differ by timestamp or nonce. Equal body hashes alone prove nothing. Probe 401 is inconclusive (session expiry); 403/404 with valid controls is `not-reproduced` for that comparison. Missing field may be negative for that field; different value or invalid JSON is inconclusive. Privacy and absence of shared permission remain operator verified preconditions.
 
-Las identidades deben ser distintas, del mismo tipo y obtenidas antes de la comparación, con las mismas credenciales que después usan baseline/sonda. El endpoint de identidad y el recurso deben compartir origen. El control anónimo tiene que denegarse y el baseline tener un dato protegido significativo. La confirmación requiere que la sonda devuelva ese dato y cumpla los controles de propiedad/rol/tenant.
+## Facts and evidence
 
-Una respuesta completa puede variar por timestamps o nonces: se compara la propiedad seleccionada. Un hash de cuerpo igual no confirma nada por sí solo. Un 401 en la sonda queda inconcluso porque la sesión puede haber expirado; 403/404 con controles válidos es `not-reproduced` para esa comparación. Una propiedad ausente puede ser negativa para esa propiedad; un valor diferente o un JSON ilegible queda inconcluso. La privacidad y ausencia de permisos compartidos siguen siendo precondiciones verificadas por el operador.
-
-## Hechos y evidencia
-
-Los pasos de `run` admiten `observe: [{ name, pointer }]`, con JSON Pointer RFC 6901. Se conserva nombre, presencia, tipo, si el valor era significativo y su SHA-256. Se distinguen propiedad ausente, null y respuesta no interpretable. Nunca se guardan los valores originales.
+`run` steps accept `observe: [{ name, pointer }]` using RFC 6901 JSON Pointer. Stored facts contain name, presence, type, significance, and SHA-256, distinguishing absent, null, and unreadable. Original values are never saved.
 
 ```powershell
 node dist/cli.js evaluate-semantic runs/investigation/run --checks runs/investigation/checks.json --out runs/result.md
@@ -75,20 +80,16 @@ node dist/cli.js evidence-view runs/investigation/run --query view.json
 node dist/cli.js compare-runs --before runs/old --after runs/new --out runs/comparison.json
 ```
 
-`view.json`: `{ "kind": "summary", "offset": 0, "limit": 20 }`. Para páginas, usar `kind: "attempts"` o `"fields"`, `offset`, `limit` de 1 a 50 y opcional `stepId`. Conservar `revisionDigest` como `expectedDigest` para rechazar una revisión que cambió al reanudar. Los IDs son `sessionId:stepId` y `sessionId:stepId:factName`.
+`view.json` example: `{ "kind": "summary", "offset": 0, "limit": 20 }`. For pages use `attempts` or `fields`, offset/limit 1–50, and optional `stepId`. Carry `revisionDigest` as `expectedDigest` to reject a changed resumed revision. IDs are `sessionId:stepId` and `sessionId:stepId:factName`. Comparison links both revisions and distinguishes definition, response, and fact changes without classifying bugs. Credential/input values cannot be compared; input digests are bound to a session. Low-entropy hashes can be guessed and artifacts do not authenticate their operator.
 
-La comparación conserva referencias a ambas revisiones y distingue cambios de definición, respuesta y hechos. No clasifica vulnerabilidades. Los valores de credenciales/inputs no están disponibles para comparar; los digests de inputs están ligados a una sesión y no se toman como identidad entre ejecuciones. Los hashes de valores de poca entropía pueden adivinarse. Estos artefactos no autentican al operador.
+For `hunt`, `browser-check`, and `browser-scenario`, `artifact.json` binds journal/result to scope/config digests. `artifact-view <dir> --query view.json` verifies files and supports `summary`, `events`, or `fields`, pagination, `eventType`, and optional `expectedDigest`. Event IDs are stable ordinals. Old unsealed or interrupted artifacts retain their old format; inspect raw files and budget without assuming a complete journal.
 
-Para `hunt`, `browser-check` y `browser-scenario`, `artifact.json` vincula el journal y resultado con digests de scope/config. `artifact-view <carpeta> --query view.json` verifica esos archivos y permite `kind: "summary"`, `"events"` o `"fields"`, con offset/limit, `eventType` y `expectedDigest` opcionales. Los eventos tienen IDs estables por ordinal. El summary no vuelca los objetos completos del inicio. Los artefactos anteriores sin sello y las ejecuciones interrumpidas conservan su formato original: revisar los archivos crudos y el presupuesto sin asumir que hay un registro completo.
+## Budget across phases
 
-## Presupuesto entre fases
-
-Un scope nuevo debe incluir `budgetId`, por ejemplo `dcs-public-pilot`. CLI/MCP usan `.bba-budgets/<budgetId>/` junto al archivo de scope original. Reutilizá esa ubicación canónica para run/resume, capture, hunt, investigate y browser-check.
+New scopes should carry `budgetId`, e.g. `dcs-public-pilot`. CLI/MCP keep `.bba-budgets/<budgetId>/` next to the original scope file; reuse its canonical path across run/resume, capture, hunt, investigate, and browser-check.
 
 ```powershell
 node dist/cli.js inspect-budget .bba-budgets/dcs-public-pilot
 ```
 
-El contador, intervalo y duración total sobreviven a carpetas nuevas y procesos caídos. La autorización y los límites de ese presupuesto no se pueden cambiar; las fases pueden restringir su superficie bajo la misma autorización. Un lock SQLite impide fases concurrentes. La reserva global se confirma antes de enviar y queda consumida si el resultado es incierto. Una reserva local puede consumir su presupuesto aunque no llegue a reservar red globalmente.
-
-El runner fija la ubicación del presupuesto en sus checkpoints y rechaza retomar con otro ledger. No borrar, copiar a otra ubicación ni renombrar el ID para reiniciar consumo. Los scopes históricos sin `budgetId` conservan su semántica por ejecución. Las herramientas externas y la navegación fuera de BBA requieren contabilidad adicional. El presupuesto es un control operativo, no una prueba de permiso ni una defensa frente a un operador que pueda reescribir todos los archivos.
+Count, interval, and total duration survive new output folders and process crashes. Authorization and limits cannot be changed for that budget; phases may narrow their surface. A SQLite lock prevents concurrent phases. A global reservation is committed before sending and consumed if outcome is uncertain. A local reservation may consume local budget even without a global network reservation. Checkpoints pin budget location and reject another ledger. Do not delete/copy/rename it to reset consumption. Older scopes without `budgetId` retain per-run semantics. External tools and off-BBA browsing need separate accounting. Budget is an operational control, not proof of permission or protection against someone who can rewrite all files.

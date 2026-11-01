@@ -154,7 +154,7 @@ try {
   Add-Text 'SKILL.md' $skill
   Add-Text 'INSTALL-CLAUDE-CODE.md' $install
   Add-Text 'INSTALL-CLAUDE-CODE.es.md' $installEs
-  foreach ($item in @('package.json', 'package-lock.json', 'README.md', 'README.en.md', 'SKILL.es.md', 'dist', 'docs', 'references', 'agents', 'cases', 'node_modules/playwright-core')) {
+  foreach ($item in @('package.json', 'package-lock.json', 'README.md', 'SKILL.es.md', 'dist', 'docs', 'references', 'agents', 'cases', 'node_modules/playwright-core')) {
     $path = Join-Path $projectRoot $item
     if (-not (Test-Path -LiteralPath $path)) { throw "Missing package item: $item" }
     if ((Get-Item -LiteralPath $path).PSIsContainer) {

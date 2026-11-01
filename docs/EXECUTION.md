@@ -1,42 +1,35 @@
-# Núcleo de ejecución
+# Execution core
 
-**Español** · [English](EXECUTION.en.md)
+**English** · [Español](es/EXECUTION.md) · [Português (Brasil)](pt-BR/EXECUTION.md) · [简体中文](zh/EXECUTION.md)
 
-Este bloque ejecuta planes HTTP finitos con alcance verificable por código y conserva intentos entre procesos. Las respuestas HTTP son observaciones; las [comprobaciones semánticas](INVESTIGATION.md) y las [pruebas de navegador](BROWSER-CHECKS.md) agregan sus propios criterios de confirmación. `lab` conserva su formato anterior.
+This core runs finite HTTP plans under code-checked scope and persists attempts across processes. HTTP replies are observations; [semantic checks](INVESTIGATION.md) and [browser checks](BROWSER-CHECKS.md) have their own confirmation criteria. `lab` retains its previous artifact format.
 
-## Preparar un scope
+## Prepare scope
 
-El contrato se valida en [src/scope.ts](../src/scope.ts). `scope-check` es offline: no lee políticas remotas ni convierte una referencia escrita en permiso. La política/autoridad real, las técnicas admitidas y la ausencia de efectos no deseados de cada GET se verifican antes de ejecutar.
+[src/scope.ts](../src/scope.ts) validates the contract. `scope-check` is offline: it does not read remote policy or turn a written reference into permission. Verify actual authority, permitted techniques, and safe GET effects before execution.
 
-| Campo | Requisito |
+| Field | Requirement |
 |---|---|
 | `schemaVersion` | `1` |
-| `mode` | `loopback-lab` para HTTP a `127.0.0.1` con puerto explícito; `public-https` para HTTPS a direcciones públicas permitidas |
-| `authorization` | `reference` sin secretos y timestamps UTC ISO `validFrom` / `validUntil` |
-| `allowed` | Lista de `{ origin, paths }`; coincidencia exacta, sin wildcards |
-| `excluded` | Mismo formato; la exclusión siempre prevalece |
-| `requestHeaders` | Opcional: lista de `{ origin, name, valueEnv }` por origen permitido. Nombre lowercase `user-agent` o `x-*`; valor desde una variable `BBA_HEADER_*`, nunca literal |
-| `requestRules` | Opcional: `{ origin, path, method, queryNames, bodyFormats }` por operación exacta; requiere que el path esté permitido y no excluido |
-| `budgetId` | Opcional para compatibilidad; los scopes nuevos deben usarlo para compartir el presupuesto entre fases en la ubicación canónica del scope |
-| `limits.maxRequests` | Presupuesto total de la investigación, de 1 a 100 intentos |
-| `limits.minIntervalMs` | Separación mínima entre el final de un intento y el inicio del siguiente, de 0 a 60000 ms |
-| `limits.timeoutMs` | Deadline por solicitud, incluyendo DNS y lectura; de 1 a 60000 ms |
-| `limits.maxResponseBytes` | Máximo del cuerpo recibido por solicitud, de 1 byte a 1 MiB |
-| `limits.maxDurationMs` | Duración máxima desde la creación, de 1 ms a 24 h; incluye pausas |
+| `mode` | `loopback-lab`: HTTP to explicit-port `127.0.0.1`; `public-https`: HTTPS to allowed public addresses |
+| `authorization` | Secret-free `reference`, UTC ISO `validFrom` / `validUntil` |
+| `allowed`, `excluded` | `{ origin, paths }` with exact matching, no wildcards; exclusions win |
+| `requestHeaders` | Optional per-origin `{ origin, name, valueEnv }`; lowercase `user-agent` or `x-*`, value from `BBA_HEADER_*` |
+| `requestRules` | Optional exact `{ origin, path, method, queryNames, bodyFormats }` within allowed path |
+| `budgetId` | Optional for older scopes; new scopes should share budget across phases next to canonical scope |
+| `limits.maxRequests` | 1–100 attempts across the investigation |
+| `limits.minIntervalMs` | 0–60000 ms between an attempt's end and the next start |
+| `limits.timeoutMs` | 1–60000 ms including DNS and reading |
+| `limits.maxResponseBytes` | 1 byte–1 MiB per response body |
+| `limits.maxDurationMs` | 1 ms–24 hours since creation, including pauses |
 
-Las URLs deben ser canónicas. No se admiten query strings, fragmentos, credenciales embebidas, escapes porcentuales, segmentos normalizados ni rutas ambiguas. No pongas secretos ni datos personales en referencias, IDs o paths: esos campos se conservan como metadatos. El scope completo queda congelado por digest; incluso ampliar su vigencia requiere una investigación nueva.
+URLs must be canonical: no queries, fragments, embedded credentials, percent escapes, normalized segments, or ambiguous paths. Never put secrets/personal data in references, IDs, or paths, which persist as metadata. The full scope is frozen by digest; even extending validity requires a new investigation. By default only GET without query/body is allowed. `requestRules` can explicitly allow GET, HEAD, OPTIONS, POST, PUT, PATCH, DELETE, selected query names, and body formats. Review each state-changing operation, use controlled resources, and plan cleanup. Redirects, path escapes, wildcards, and embedded URL queries stay blocked. An example rule is `{ "origin": "https://service.example", "path": "/api/search", "method": "POST", "queryNames": ["page"], "bodyFormats": ["json"] }`. GET/HEAD never accept bodies.
 
-Sin reglas adicionales, el scope conserva GET sin query/body. `requestRules` habilita GET, HEAD, OPTIONS, POST, PUT, PATCH o DELETE, nombres de parámetros y formatos de cuerpo seleccionados. No autoriza efectos implícitos: revisar cada operación, usar recursos controlados y prever cleanup para cambios de estado. No se siguen redirects ni se admiten escapes de path, wildcards o queries embebidas en URL.
+Identification `requestHeaders` are not authentication or spoofing tests. Each origin/name pair must be unique; values are 1–512 printable ASCII characters resolved before execution and discarded from evidence. Missing values, CR/LF, and auth/transport names are blocked. Browser requests follow the same origin rule. Changing references changes scope digest and cannot silently alter a resumed run. `prepare --scope scope.json --target <exact-url> --out <new-dir>` writes an offline case, scope copy, seed plan, and notes without requests or proof of authority.
 
-Ejemplo de operación explícita: `{ "origin": "https://service.example", "path": "/api/search", "method": "POST", "queryNames": ["page"], "bodyFormats": ["json"] }`. Solo habilita esa combinación de origen/path/método y los inputs declarados. Las exclusiones prevalecen. GET/HEAD no admiten body.
+## Prepare plan
 
-`requestHeaders` configura identificación requerida por el programa, no autenticación ni pruebas de spoofing. Cada par origen/nombre debe ser único. Los valores se resuelven antes de ejecutar, deben ser ASCII imprimible de 1 a 512 caracteres y se descartan de la evidencia. Se bloquean valores faltantes, CR/LF y nombres de auth/transporte. La misma restricción de origen aplica a solicitudes del navegador. Agregar o cambiar referencias modifica el digest del scope; no se aplica silenciosamente a una reanudación anterior.
-
-`prepare --scope scope.json --target <URL-exacta> --out <carpeta-nueva>` crea un caso offline con copia del scope, plan semilla y registro de investigación. No verifica la autoridad real ni envía solicitudes. El agente completa política y precondiciones antes de ejecutar ese plan. No convierte URLs descubiertas en permisos nuevos.
-
-## Preparar un plan
-
-`plan.json` contiene `schemaVersion: 1` y `steps`, de 1 a 100 pasos ordenados. Los campos requeridos de cada paso son:
+`plan.json` has `schemaVersion: 1` and 1–100 ordered steps, each with ID, method, URL, and credential reference:
 
 ```json
 {
@@ -47,55 +40,64 @@ Ejemplo de operación explícita: `{ "origin": "https://service.example", "path"
 }
 ```
 
-Es un ejemplo de estructura, no un target a ejecutar. Para una demo real autoconfigurada, usá `npm run demo:core -- --out runs/core-demo`.
+This is a structural example; `npm run demo:core -- --out runs/core-demo` makes a real local demonstration. Optional fields: `query: [{ name, valueEnv: "BBA_INPUT_PAGE" }]`, `body: { format: "json", valueEnv: "BBA_BODY_SEARCH" }`, `observe: [{ name: "id", pointer: "/result/id" }]`. Input values are never arguments or persisted. Queries allow up to 20 unique names, 2,048 bytes per value, and a resolved URL up to 8,192 characters. Bodies allow 64 KiB in JSON, form, or text; JSON is validated before a network reservation. Session-bound digests fix inputs at start and reject changed inputs on resume. Preserve original values in the environment; credential rotation does not permit changing inputs.
 
-Opcionales: `query: [{ name, valueEnv: "BBA_INPUT_PAGE" }]`, `body: { format: "json", valueEnv: "BBA_BODY_SEARCH" }` y `observe: [{ name: "id", pointer: "/result/id" }]`. Los valores no viajan como argumentos ni se guardan. Query: hasta 20 nombres únicos, 2048 bytes por valor y URL resuelta de hasta 8192 caracteres. Body: hasta 64 KiB; formatos JSON, form y text. JSON se valida antes de reservar red. Un digest ligado a la sesión fija todos los inputs al comenzar y bloquea cambios al retomar. Conservar esos valores originales en el entorno; rotar credenciales no equivale a cambiar inputs.
+`credentialEnv` is `null` for anonymous or a `BBA_TOKEN_*` Bearer or `BBA_COOKIE_*` Cookie string (`name=value; name2=value2`). Missing or invalid values fail before reservation. Values are never stored in arguments, results, logs, or evidence; they must be available again for resume.
 
-`credentialEnv` puede ser `null` para acceso anónimo o el nombre de una variable `BBA_TOKEN_*` (se envía como Bearer) o `BBA_COOKIE_*` (se envía como header `Cookie`, formato `nombre=valor; nombre2=valor2`). El operador proporciona el valor por su entorno; BBA no lo incluye en argumentos, resultados, logs ni base de evidencia. Variables faltantes o formato inválido fallan antes de reservar solicitudes. Los valores no se guardan para reanudaciones: deben seguir disponibles en el entorno correspondiente.
+## Execution and network
 
-## Ejecución y red
+1. Validate scope/plan, acquire exclusive run lock, check previous checkpoints.
+2. Mark reservations without results `interrupted`; do not resend or refund them.
+3. Check budget, authorization window, deadline, interval, and cancellation; persist reservation before sending.
+4. Validate destination, resolve DNS, pin the accepted address for this connection while retaining hostname/SNI and TLS validation.
+5. Persist minimal result or stop cause; continue only to the next permitted step.
 
-1. Validar scope/plan, tomar el bloqueo exclusivo de la investigación y verificar checkpoints previos.
-2. Resolver intentos reservados sin resultado como `interrupted`; no reenviarlos ni devolver su presupuesto.
-3. Revisar presupuesto, ventana, deadline, intervalo y cancelación. Persistir una reserva antes de enviar.
-4. Validar destino, resolver DNS y fijar la dirección aceptada para esa conexión, manteniendo hostname/SNI y validación TLS.
-5. Persistir el resultado mínimo o la causa de detención; continuar únicamente con el próximo paso permitido.
+```mermaid
+flowchart LR
+    A["Validate scope + plan"] --> B["Acquire run lock"]
+    B --> C["Check budget, window,<br/>deadline, interval"]
+    C --> D["Persist reservation"]
+    D --> E["Validate destination,<br/>pin DNS, send"]
+    E --> F["Persist minimal result"]
+    F -->|next step| C
+    F -->|stop cause| G["stopped"]
+```
 
-En modo público se rechazan resoluciones con direcciones privadas, loopback o rangos especiales conocidos, incluso respuestas mixtas. IPv6 se limita conservadoramente a un subconjunto global unicast; no se pretende aceptar toda dirección pública posible. Se valida cada conexión, sin re-resolver dentro del transporte. No se usan proxies del entorno, no se desactiva TLS y no se siguen redirecciones, aunque el destino alternativo aparezca en scope. No se reintentan fallos automáticamente.
+Public mode rejects DNS sets containing private, loopback, or known special addresses, including mixed answers. IPv6 conservatively supports a global-unicast subset. Each connection is validated without a later transport re-resolution. Environment proxies are unused, TLS is not disabled, redirects are not followed even to scoped targets, and failures are not retried automatically. Execution is sequential with shared per-run budgets. With `budgetId`, CLI/MCP share a locked durable ledger across phases; another ledger is rejected on resume. Historical scopes remain per-run. [Cross-phase budget](INVESTIGATION.md#budget-across-phases) explains it; external tools require extra accounting.
 
-El ejecutor es secuencial y comparte presupuesto entre pasos/orígenes. Con `budgetId`, CLI/MCP mantienen un ledger común entre fases junto al scope original, con lock, intervalo y duración total persistentes. Retomar con otro ledger se rechaza. Los scopes históricos sin ese campo siguen con presupuesto por ejecución. Ver [presupuesto entre fases](INVESTIGATION.md#presupuesto-entre-fases); las herramientas externas requieren contabilidad adicional.
+## Checkpoints and recovery
 
-## Checkpoints y recuperación
+`session.sqlite` stores versioned snapshots with sequence, previous hash, and state SHA-256; every reservation and result commits with `synchronous=FULL`. Loading verifies checkpoints, contracts, transitions, and completed evidence immutability. `execution-lock.sqlite` holds a separate transaction lock while running. The OS releases it on process death; committed checkpoints remain. No PID or lock file needs manual deletion. `.initializing` marks an incomplete directory if creation fails; choose another output.
 
-`session.sqlite` contiene snapshots versionados, con secuencia, hash del anterior y SHA-256 del estado. Cada reserva y resultado se confirma con `synchronous=FULL`. La carga comprueba todos los checkpoints, contratos, transiciones e inmutabilidad de evidencias completadas.
-
-`execution-lock.sqlite` mantiene una transacción de bloqueo separada durante la ejecución. El sistema operativo la libera al morir el proceso, mientras los checkpoints ya confirmados sobreviven. No se usa un PID o un archivo de lock que haya que borrar manualmente. El directorio tiene `.initializing` hasta terminar la creación; si falla antes, queda incompleto y debe usarse otra salida.
-
-| Estado | Significado / recuperación |
+| State | Meaning / recovery |
 |---|---|
-| `ready` | Creado sin solicitudes; `resume` puede comenzar |
-| `running` | En ejecución; si murió el proceso, `resume` recupera reservas pendientes como inconclusas |
-| `paused` | Cancelación; `resume` requiere el mismo scope vigente y credenciales pendientes |
-| `stopped` | Error, límite o respuesta 3xx/429/5xx; revisar causa y crear otra investigación si corresponde |
-| `completed` | Todos los pasos tienen respuesta completa; no significa que el target sea seguro |
-| `partial` | Todos los pasos fueron consumidos, pero hubo solicitudes canceladas/interrumpidas sin resultado |
+| `ready` | Created without requests; `resume` may start |
+| `running` | In progress; resume after process death marks pending reservations inconclusive |
+| `paused` | Cancelled; resume needs same valid scope and pending credentials |
+| `stopped` | Error, limit, or 3xx/429/5xx; review cause and possibly open a new case |
+| `completed` | All steps have full replies; not a target safety claim |
+| `partial` | All steps consumed but some cancelled/interrupted without results |
 
-Una reserva anterior al envío puede consumir presupuesto aunque el proceso muera antes de alcanzar la red. Es conservador: nunca se afirma que una solicitud incierta no ocurrió. Al cancelar un request, tampoco se puede deshacer lo que el servidor ya procesó.
+```mermaid
+stateDiagram-v2
+    [*] --> ready: session created, no requests
+    ready --> running: run / resume
+    running --> completed: every step has a full reply
+    running --> partial: steps cancelled or interrupted
+    running --> paused: Ctrl+C
+    running --> stopped: error, limit, 3xx / 429 / 5xx
+    paused --> running: resume (same scope)
+    running --> running: process death, then resume marks pending reservations interrupted
+```
 
-Ctrl+C solicita cancelación cooperativa. Si el proceso termina abruptamente, la recuperación se realiza en la siguiente invocación. No se extienden ventana, duración ni presupuesto al retomar. Los cambios del scope y la autorización vencida bloquean nuevas solicitudes. La herramienta no detecta por sí misma cambios remotos de política: deben relevarse antes de reanudar.
+A pre-send reservation may consume budget even if the process died before network; BBA never claims an uncertain request did not occur. Cancellation cannot undo server-side processing. Ctrl+C requests cooperative cancellation. Resume never extends window, duration, or budget. Scope changes or expired authorization block new requests. Remote policy changes must be checked by the operator before resume.
 
-## Evidencia y compatibilidad
+## Evidence and compatibility
 
-Se conservan `status`, tamaño, SHA-256 del cuerpo y, si se pidieron, hechos JSON proyectados (presencia/tipo/digest). El contenido original, headers y tokens se descartan de la sesión. Headers seleccionados CSP/CORS se entregan en memoria al navegador para sus comprobaciones. Para redirecciones/429/5xx se cierra sin leer el cuerpo, por eso el tamaño es cero y el hash corresponde al cuerpo vacío. Para errores de lectura la respuesta queda `null`.
+Stored evidence includes status, size, body SHA-256, and requested projected JSON facts (presence, type, digest). Original content, headers, and tokens are dropped. Selected CSP/CORS headers are passed in memory to browser checks. Redirect/429/5xx bodies are not read, so size is zero and hash is of the empty body; read errors leave response `null`. Hashes detect corruption but not authorship or wholesale history rewriting and cannot prove no valid suffix was removed. Do not treat third-party databases as trusted evidence or authorization.
 
-Los hashes sirven para detectar corrupción e inconsistencias, no para autenticar al autor ni resistir a alguien que pueda reescribir la base y recalcular todo. Tampoco prueban por sí solos que no se eliminó un sufijo válido del historial. No tomes bases de terceros como autorización o evidencia confiable.
+`inspect-run`, `export-run`, and `report-run` are offline and write only new files. Exported JSON is a review snapshot, not an import/resume format. Keep the original SQLite directory for recovery. `report.md` does not turn HTTP metadata into findings. Historical `lab`, `inspect`, and `report` use schema 1 / `toolVersion: 0.1.0`; general sessions use schema 2 / `toolVersion: 0.2.0`, without destructive migration.
 
-`inspect-run`, `export-run` y `report-run` son offline. Las exportaciones se crean exclusivamente en archivos nuevos; el JSON exportado es un snapshot para revisión, no un formato de importación/reanudación. Para recuperar, conservá la carpeta SQLite original. El `report.md` no transforma metadatos HTTP en hallazgos.
+## Verification and current limits
 
-Los comandos antiguos `lab`, `inspect` y `report` siguen leyendo/escribiendo bundles schema 1 con `toolVersion: 0.1.0`. Las sesiones generales usan schema 2 y `toolVersion: 0.2.0`. No hay migración destructiva de los artefactos anteriores.
-
-## Verificación y límites actuales
-
-La suite usa HTTP real en loopback, incluyendo caída de proceso, cancelación, contención de locks, expiración, cambios de scope, presupuesto persistido, límites de respuesta y corrupción. DNS público se comprueba además con un resolver controlado. El piloto público DCS de 1.2 comprobó tres GET HTTPS y una captura de inicio con el presupuesto común; los escenarios de permisos e inputs se verifican en laboratorios controlados, sin extrapolarlos a ese sitio.
-
-Node valida los contratos en ejecución y elimina los tipos. `npm run check` agrega TypeScript estricto para fuentes/scripts, y `npm run verify` ejecuta check, build y tests. GitHub Actions corre esa verificación en Ubuntu y Windows; no hay linter configurado. El núcleo usa bibliotecas de Node; `playwright-core` sirve captura y pruebas de navegador. TypeScript y tipos de Node son dependencias de desarrollo.
+Tests use real loopback HTTP for process death, cancellation, lock contention, expiry, scope changes, persistent budget, response limits, and corruption, plus controlled-resolver public DNS. The DCS 1.2 public pilot made three HTTPS GETs and one home capture under a common budget; permission and input scenarios were verified only in controlled labs. Node validates contracts at runtime and strips types. `npm run check` checks TypeScript sources/scripts, while `npm run verify` runs check, build, and tests. GitHub Actions runs verification on Ubuntu and Windows; no linter is configured. `playwright-core` supports capture/browser checks; TypeScript and Node types are development dependencies.

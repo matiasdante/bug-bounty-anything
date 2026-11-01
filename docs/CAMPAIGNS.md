@@ -1,96 +1,51 @@
-# Expediente de campaña (1.9.0)
+# Campaign case (1.9.0)
 
-**Español** · [English](CAMPAIGNS.en.md)
+**English** · [Español](es/CAMPAIGNS.md) · [Português (Brasil)](pt-BR/CAMPAIGNS.md) · [简体中文](zh/CAMPAIGNS.md)
 
-El expediente coordina una investigación de un solo objetivo. Conserva la fuente
-de alcance, la revisión de política, la superficie, el perfil de cuentas propias,
-la ejecución y el borrador. Cada enlace queda en un journal con digest encadenado.
-`campaign_status` vuelve a validar los archivos y muestra el presupuesto y el
-siguiente paso. Esta verificación detecta cambios accidentales o inconsistencias;
-no autentica al dueño de la política ni convierte una observación en un hallazgo.
+A campaign coordinates one-target research: scope source, policy review, surface, owned-account profile, execution, and draft. Links are recorded in a hash-chained journal. `campaign_status` revalidates files and shows budget and next step. It detects accidental changes or inconsistency; it neither authenticates the policy owner nor turns an observation into a finding.
 
-## Inicio y autorización
+```mermaid
+flowchart LR
+    O["campaign-open"] --> S["link scope"]
+    S --> P["policy review<br/>+ link policy"]
+    P --> F["campaign-capture<br/>or link surface"]
+    F --> R["link profile"]
+    R --> E["campaign-execute"]
+    E --> D["report.md draft"]
+    E -. interrupted .-> X["campaign-resume"]
+    X --> D
+```
 
-1. `campaign_open` / `campaign-open --target <url> --out <carpeta-nueva>` crea el
-   expediente sin requests. El objetivo debe ser una URL canónica.
-2. Escribí dentro del expediente un `scope.json` con `budgetId` estable, ventana
-   vigente, activos/rutas y métodos precisos, límites y referencia de autorización.
-   `campaign_link` / `campaign-link --kind scope` valida que el objetivo esté
-   cubierto y deja el alcance inmutable para el caso.
-3. Consultá la política oficial vigente o autorización escrita del dueño.
-   Guardá una copia de texto como `policy-source.txt` dentro del expediente.
-   `campaign-policy-review` / `campaign_policy_review` genera un `policy.json`
-   que liga el SHA-256 de esos bytes al scope y a la decisión explícita del
-   operador. Revisá el archivo y enlazalo con `campaign-link --kind policy`.
-   La forma histórica sin copia local también se acepta; por ejemplo:
+## Open and authorize
+
+1. `campaign_open` / `campaign-open --target <url> --out <new-directory>` creates a case without requests. The target must be a canonical URL.
+2. Write `scope.json` in the case with stable `budgetId`, current authorization window, exact assets/routes/methods, limits, and authorization reference. `campaign_link --kind scope` checks target coverage and freezes this scope for the case.
+3. Read the current official program policy or written owner permission. Save a text copy as `policy-source.txt`. `campaign-policy-review` / `campaign_policy_review` generates `policy.json`, binding the source SHA-256 to scope and explicit operator decision. Review and link it with `campaign-link --kind policy`. The historical form without a local copy is still accepted:
 
 ```json
 {
   "schemaVersion": 1,
   "sourceUrl": "https://program.example/policy",
   "reviewedAt": "2026-10-30T12:00:00.000Z",
-  "scopeDigest": "<sha256 canónico del scope>",
-  "authorizationReference": "<igual a scope.authorization.reference>",
+  "scopeDigest": "<canonical scope SHA-256>",
+  "authorizationReference": "<same as scope.authorization.reference>",
   "sourceKind": "official-program-policy",
   "operatorDecision": "authorized"
 }
 ```
 
-Usá `uncertain` cuando no se pueda establecer el permiso. El registro documenta
-la decisión humana: la herramienta no descarga ni valida la política. En particular,
-la URL de una política, un `security.txt` o el interés del usuario no habilitan
-pruebas activas por sí solos. `campaign_link --kind policy` la fija al scope.
-`campaign_status` indica `policySourceBound` y detecta si cambia la copia local.
-El digest acredita integridad de esa copia, no autenticidad de su origen ni
-permiso del dueño; conservá también el enlace y fecha de consulta.
+Choose `uncertain` if permission cannot be established. This records a human decision; the tool does not fetch or validate policy. A policy URL, `security.txt`, or user interest alone does not authorize active tests. `campaign_status` reports `policySourceBound` and detects changes to the local copy. Its hash shows copy integrity, not source authenticity or owner permission; retain the link and consultation date.
 
-## Recorrido MCP y CLI
+## MCP and CLI flow
 
-Con el MCP en modo `--allow-network`, `campaign_capture` captura **una vez** la
-URL exacta del objetivo mediante GET acotados. Guarda `pages.json`, `capture.json`
-y `surface.json` en `actions/capture/output`, y enlaza los hechos de página y la
-superficie observada cuando tiene entradas. Si el DOM menciona otras rutas, quedan
-como indicios: no se visitan automáticamente ni cambian el scope. En CLI:
-`bba campaign-capture <expediente>`.
+With MCP `--allow-network`, `campaign_capture` captures the **exact target URL once** using bounded GETs. It writes `pages.json`, `capture.json`, and `surface.json` under `actions/capture/output` and links observed page and surface facts. DOM paths are clues, never automatically visited or added to scope. CLI: `bba campaign-capture <case>`.
 
-También se puede importar una superficie OpenAPI, Swagger, HAR o REA y vincular
-su bundle JSON con `campaign_link --kind surface`. El perfil de investigación,
-escrito con dos identidades controladas y reglas de negocio explícitas, se
-enlaza con `--kind profile`. `campaign_status` informa cuántos checks semánticos
-se compilaron y qué clases o entradas quedaron sin regla. Un perfil nuevo puede
-seguir a una superficie nueva; el antiguo permanece en el historial.
+An OpenAPI, Swagger, HAR, or REA surface bundle may instead be linked via `campaign_link --kind surface`. Link an investigation profile with two controlled identities and explicit business rules using `--kind profile`. `campaign_status` shows the number of compiled semantic checks and uncovered classes/entries. New profiles may follow new surfaces; old revisions stay in history.
 
-`campaign_execute` / `bba campaign-execute <expediente>` ejecuta **una vez por
-perfil actual** los controles anónimo, propietario y otra cuenta, usando el
-presupuesto compartido del scope. Se detiene al primer proof semántico confirmado
-por el evaluador. Guarda el run y `report.md` en
-`actions/investigation-<secuencia>/output` y enlaza ambos si el run terminó o se
-detuvo con `proof-complete`. Las credenciales se leen de `BBA_TOKEN_*` o
-`BBA_COOKIE_*` en el entorno del MCP; nunca se aceptan como argumentos ni se
-guardan en el expediente. El reporte es un borrador que requiere revisión de
-impacto, reproducción y reglas de divulgación antes de presentarlo.
+`campaign_execute` / `bba campaign-execute <case>` runs anonymous, owner, and other-account controls **once per current profile** under the shared scope budget. It stops at the first confirmed semantic proof. The run and `report.md` are saved under `actions/investigation-<sequence>/output` and linked when complete or stopped at `proof-complete`. Credentials come from `BBA_TOKEN_*` or `BBA_COOKIE_*` in the MCP environment, never arguments or case files. Review impact, reproduction, and disclosure rules before submitting the draft.
 
-## Detenciones y reanudación
+## Stops and resume
 
-El directorio de acción se reserva antes de iniciar requests. Si la captura o
-investigación se interrumpe, `campaign_status` muestra `interrupted-action` y
-no vuelve a lanzar la misma acción. Inspeccioná `started.json`, el output y
-`inspect_budget` antes de decidir cómo continuar. Las reservas inciertas y una
-ventana vencida bloquean nuevas acciones. Para una investigación con sesión
-pausada, `campaign_resume` / `bba campaign-resume <expediente>` verifica que el
-scope, la superficie y el perfil aún coinciden con el checkpoint. Reanuda solo
-los pasos no iniciados, escribe `report-resumed.md` y enlaza el run y el reporte
-si termina. Un run ya terminal con reporte guardado se enlaza sin más requests.
-La captura de navegador no se reanuda automáticamente.
+An action directory is reserved before requests. On interrupted capture/investigation, `campaign_status` shows `interrupted-action` and will not rerun it. Inspect `started.json`, output, and `inspect_budget`. Uncertain reservations or expired windows block new actions. `campaign_resume` / `bba campaign-resume <case>` checks current scope, surface, and profile against a paused checkpoint, resumes only unstarted steps, writes `report-resumed.md`, and links completed artifacts. A terminal run with an existing report is linked without more requests. Browser capture has no automatic resume.
 
-El borrador semántico responde por separado qué es, cómo se encontró, qué prueba
-existe, cómo reproducirla y cómo corregirla. La sección de demostración conserva
-el estado exacto de cada check y sus IDs de evidencia; no convierte un resultado
-`unresolved` en un impacto declarado.
-
-El journal registra a lo sumo 100 eventos, con rutas reales dentro de la carpeta
-del expediente. Los checks automáticos cubren actualmente BOLA, BFLA, exposición
-de propiedades y separación de tenants en GET JSON con identidades y reglas
-declaradas. Otros vectores requieren sus herramientas específicas o quedan como
-brechas de cobertura. El expediente no afirma haber encontrado una vulnerabilidad
-crítica ni haber revisado todas las superficies.
+The semantic draft separately explains the issue, discovery, proof, reproduction, and fix. Proof retains each check's exact state and evidence IDs; `unresolved` never becomes claimed impact. Journal limit is 100 events with paths confined to the case directory. Automatic checks currently cover BOLA, BFLA, property exposure, and tenant isolation for JSON GET under declared identity and business rules. Other vectors require their own tools or remain gaps. A case does not claim a critical vulnerability or complete surface coverage.

@@ -1,26 +1,24 @@
-# Pruebas de XSS y CORS en Chromium
+# XSS and CORS checks in Chromium
 
-**Español** · [English](BROWSER-CHECKS.en.md)
+**English** · [Español](es/BROWSER-CHECKS.md) · [Português (Brasil)](pt-BR/BROWSER-CHECKS.md) · [简体中文](zh/BROWSER-CHECKS.md)
 
-`browser-check --scope scope.json --config browser.json --out <carpeta-nueva>` y MCP `browser_check` ejecutan comparaciones finitas sobre datos y orígenes controlados. Requieren Chromium instalado y scope/técnicas autorizados. La presencia de headers o texto reflejado no alcanza como prueba.
+`browser-check --scope scope.json --config browser.json --out <new-directory>` and MCP `browser_check` run finite comparisons against controlled data and origins. Chromium, authorized scope, and allowed techniques are required. Headers or reflected text alone are insufficient evidence.
 
-Todas las solicitudes pasan por el transporte de BBA. Solo salen GET cuya URL completa y método coincidan con los pasos declarados y sus inputs del entorno. Se preservan headers CSP, CORS, aislamiento de orígenes y `nosniff`; no se siguen redirects. Service workers, WebSockets, descargas y accesos fuera del plan están bloqueados. Se mantienen el proxy sumidero y la política WebRTC. Un presupuesto compartido se aplica cuando el scope incluye `budgetId`.
+All requests use BBA's transport. Only GETs whose complete URL, method, and environment-bound inputs match declared steps are sent. CSP, CORS, origin isolation, and `nosniff` headers are preserved; redirects are not followed. Service workers, WebSockets, downloads, and off-plan access are blocked. The rejecting loopback proxy and WebRTC policy remain active. `budgetId` activates the shared budget.
 
-## Campos comunes
+## Common fields
 
-`schemaVersion: 1`, `class`, `policyReference`, `observationMs` (50–5000), `baseline`, `probe` y `resources`. Los pasos usan el contrato de `run`: ID, GET, URL base y `credentialEnv`, con query opcional desde `BBA_INPUT_*`. IDs únicos. `resources` enumera los assets que las páginas realmente necesitan; no se amplía a hosts descubiertos automáticamente. Los pasos no admiten bodies ni proyecciones en estas pruebas.
+Use `schemaVersion: 1`, `class`, `policyReference`, `observationMs` (50–5000), `baseline`, `probe`, and `resources`. Steps use the `run` contract: unique ID, GET, base URL, `credentialEnv`, and optional query input from `BBA_INPUT_*`. `resources` lists assets the pages actually require; discovered hosts are not added automatically. These checks do not accept request bodies or projections.
 
 ## XSS
 
-Configurar `class: "xss"`, `boundary: "untrusted-input-script"` y `markerEnv: "BBA_INPUT_MARKER"`. Baseline y sonda navegan la misma URL base con las mismas credenciales y distintos inputs concretos. El marcador es opaco y único, de 12 a 128 caracteres alfanuméricos, guion o underscore.
+Set `class: "xss"`, `boundary: "untrusted-input-script"`, and `markerEnv: "BBA_INPUT_MARKER"`. Baseline and probe navigate the same base URL with the same credentials but different concrete inputs. The unique opaque marker is 12–128 alphanumeric, hyphen, or underscore characters. The agent prepares benign input and a minimal context-specific payload that attempts `window.__bbaProof(marker)`. The payload stays in an environment variable, not the plan or report. Chromium exposes the function solely to observe the expected marker called from the application origin. It never reads cookies, files, tokens, or other users' data.
 
-El agente prepara un input benigno y otro mínimo que, en el contexto identificado, intente llamar a `window.__bbaProof(marcador)`. El payload queda en una variable de entorno; no se agrega al plan o reporte. Chromium expone esa función para observar únicamente el marcador esperado, llamado desde el origen de la aplicación. No se leen cookies, archivos, tokens ni datos de otros usuarios.
-
-Se confirma si la sonda ejecuta el marcador y el baseline no. El contenido escapado o bloqueado por CSP no confirma. Ejecución en ambos controles, cargas necesarias bloqueadas, presupuesto agotado o fallas quedan inconclusos. Un negativo solo describe el input/contexto y ventana observados. El operador debe establecer que el input es controlable por un atacante y llega a un contexto donde no debería ejecutar; self-XSS o HTML intencional no son automáticamente reportables. No hay generador universal de payloads ni pruebas almacenadas que puedan alcanzar usuarios reales.
+The check confirms only when the probe executes the marker and baseline does not. Escaped text or CSP blocking does not confirm. Execution in both controls, blocked required assets, exhausted budget, and failures remain inconclusive. A negative result covers only the observed input, context, and window. The operator must show attacker control and an unintended executable context; self-XSS or intended HTML is not automatically reportable. There is no universal payload generator or stored XSS test that might reach real users.
 
 ## CORS
 
-Configurar `class: "cors"`, `boundary: "private-cross-origin-read"`, `protectedPointer` y `target` (GET al dato privado). `baseline` abre una página del origen de target; `probe`, una página de un origen distinto controlado y permitido. Se configura:
+Set `class: "cors"`, `boundary: "private-cross-origin-read"`, `protectedPointer`, and `target` (GET of private data). Baseline opens a page at the target origin; probe opens a page at a different, controlled, allowed origin. Configure the cookie:
 
 ```json
 "cookie": {
@@ -30,14 +28,12 @@ Configurar `class: "cors"`, `boundary: "private-cross-origin-read"`, `protectedP
 }
 ```
 
-El `credentialEnv` de target debe coincidir con esa cookie. Solo los pasos de su origen pueden usarla; la página extranjera no la recibe por el relay. El valor tiene formato `nombre=valor; nombre2=valor2`. Chromium recibe las cookies de prueba con URL y SameSite declarados; el atributo Secure deriva de HTTPS. Esa configuración debe representar la sesión real: no se infieren los atributos ni se automatiza login/rotación.
+The target's `credentialEnv` must match this cookie. Only target-origin steps may use it; the foreign page never receives it from the relay. The value is a `name=value; name2=value2` cookie string. Chromium receives test cookies with declared URL and SameSite; Secure derives from HTTPS. This must model the actual session. BBA neither infers cookie attributes nor automates login/rotation.
 
-Se ejecuta un control anónimo, una lectura desde el propio origen y otra desde el origen extranjero mediante `fetch` con `credentials: "include"`. El relay conserva `Origin`, los headers CORS y la entrega real de cookies del navegador; nunca agrega una cookie que Chromium omitió. La confirmación requiere control anónimo denegado y lectura del mismo campo privado desde el origen extranjero.
+An anonymous control, same-origin read, and foreign-origin `fetch` with `credentials: "include"` are performed. The relay preserves `Origin`, CORS headers, and actual browser cookie delivery; it never adds a cookie omitted by Chromium. Confirmation requires anonymous denial and successful foreign-origin browser read of the same private field. Chromium rejects `Access-Control-Allow-Origin: *` with credentials. Probe 401, public data, different values, and insufficient evidence remain inconclusive. If the relay received data but the browser could not read it, that particular read was not reproduced; this says nothing about every CORS policy. The attacker origin and cookie attributes are material report preconditions.
 
-El caso `Access-Control-Allow-Origin: *` con credenciales es rechazado por Chromium. Una sonda 401, datos públicos, valor diferente o evidencia insuficiente quedan inconclusos. Si el relay recibió el dato y el navegador no pudo leerlo, no se reprodujo esa lectura; no se deduce que todas las políticas CORS sean correctas. El origen atacante y los atributos de cookie son precondiciones materiales del reporte.
+## Evidence and recovery
 
-## Evidencia y recuperación
+Scope/config copies exclude environment values. `requests.jsonl` synchronizes reservations before sending and stores minimal responses and redacted comparisons. `browser-check.json` stores observations, outcome, and checksum; `artifact.json` links journal, result, and sources for paginated `artifact-view`. `report.md` is a draft. Bodies, cookies, payloads, and the original marker are not saved; reconstruct safe inputs and exact preconditions before reporting.
 
-Se copian scope/config sin valores del entorno. `requests.jsonl` sincroniza reservas antes del envío, respuesta mínima y comparaciones redactadas. `browser-check.json` conserva observaciones, resultado y checksum; `artifact.json` vincula los archivos y sus fuentes para consulta paginada con `artifact-view`. `report.md` es un borrador. No se guardan bodies, cookies, payloads ni el marcador original; antes de enviar se deben reconstruir los inputs de prueba seguros y la reproducción exacta con sus precondiciones.
-
-No hay reanudación de una prueba de navegador. Si el proceso cae, el journal y el presupuesto compartido conservan las reservas inciertas; revisar antes de una nueva salida. La ventana total, el intervalo, los bytes, 3xx/429/5xx y cancelación mantienen sus condiciones de parada. Se verificó con aplicaciones sintéticas vulnerables/corregidas, CSP, wildcard CORS, credenciales ausentes, filtrado y sesión vencida.
+Browser checks cannot resume. After a crash, review journal and shared-budget uncertain reservations before a new output directory. Duration, interval, byte, 3xx/429/5xx, and cancellation stops still apply. Synthetic vulnerable/fixed apps, CSP, wildcard CORS, absent credentials, filtered data, and expired sessions were tested.

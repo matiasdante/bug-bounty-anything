@@ -1,0 +1,73 @@
+graph TD
+    %% Selected layer owners and dependency paths, not a complete import inventory.
+    subgraph "Entry points"
+        CLI["src/cli.ts + src/commands.ts<br/>bba CLI: command registry, groups, --lang es|en"]
+        MCP["src/mcp.ts + src/tools.ts<br/>stdio JSON-RPC server<br/>offline tools; active tools only with --allow-network"]
+        SKILL["SKILL.md + references/<br/>agent instructions that drive CLI or MCP"]
+    end
+
+    subgraph "Guards (every request passes through these)"
+        SCOPE["src/scope.ts<br/>canonical scope: assets, windows, request rules, limits"]
+        BUDGET["src/budget.ts<br/>shared budget ledger (budget.sqlite)<br/>reserve before send, hash chain"]
+        TRANSPORT["src/transport.ts + src/http.ts<br/>exact GET/rules, DNS pinned to public IP<br/>no redirects, timeout, size limits"]
+        SESSION["src/session.ts<br/>checkpoints (session.sqlite)<br/>resume only unstarted steps"]
+    end
+
+    subgraph "Orchestration"
+        CAMPAIGN["src/campaign.ts<br/>case ledger: scope, policy, surface, profile, run, report"]
+        PLANNER["src/planner.ts + src/investigation.ts<br/>hypotheses from surface and profile"]
+        EXEC["src/execution.ts<br/>sequential plans, cancellation, recovery"]
+    end
+
+    subgraph "Checks"
+        SEMANTIC["src/semantic.ts + src/checks.ts<br/>BOLA, BFLA, property exposure, tenant isolation, mass assignment"]
+        PROTO["src/jwt-integrity.ts, graphql-check.ts,<br/>oauth-check.ts, redirect-check.ts"]
+        STATE["src/template-check.ts, ssrf-callback.ts,<br/>cache-check.ts, race-check.ts, csrf-check.ts"]
+        BROWSER["src/capture.ts, browser-checks.ts,<br/>browser-scenario.ts (Chromium via playwright-core)"]
+        HUNT["src/hunt.ts<br/>discovery + BOLA confirmation"]
+    end
+
+    subgraph "Offline inputs"
+        SURFACE["src/surface.ts + src/js-surface.ts<br/>HAR, OpenAPI, REA, GraphQL, JS bundles"]
+        POLICY["src/policy-import.ts + src/candidates.ts<br/>HackerOne, Bugcrowd, Intigriti, security.txt<br/>ZAP, Nuclei, Subfinder (never executed)"]
+    end
+
+    subgraph "Evidence and output"
+        EVIDENCE["src/evidence.ts + src/artifacts.ts + src/journal.ts<br/>redacted facts, sealed artifacts, paginated views"]
+        REPORT["src/report.ts + src/report-platform.ts<br/>five-section drafts, HackerOne / Bugcrowd / GHSA exports"]
+        SIGN["src/signing.ts + src/ui.ts<br/>Ed25519 signatures, read-only inspector"]
+    end
+
+    CLI --> CAMPAIGN
+    CLI --> EXEC
+    MCP --> CAMPAIGN
+    MCP --> EXEC
+    SKILL -.drives.-> CLI
+    SKILL -.drives.-> MCP
+
+    CAMPAIGN --> PLANNER
+    CAMPAIGN --> BROWSER
+    PLANNER --> SEMANTIC
+    PLANNER --> EXEC
+    EXEC --> SESSION
+
+    SURFACE --> PLANNER
+    POLICY --> SCOPE
+
+    PROTO --> EXEC
+    STATE --> EXEC
+    STATE --> TRANSPORT
+    HUNT --> TRANSPORT
+    BROWSER --> TRANSPORT
+
+    EXEC --> BUDGET
+    EXEC --> TRANSPORT
+    TRANSPORT --> SCOPE
+
+    SEMANTIC --> EVIDENCE
+    PROTO --> EVIDENCE
+    STATE --> EVIDENCE
+    HUNT --> EVIDENCE
+    BROWSER --> EVIDENCE
+    EVIDENCE --> REPORT
+    EVIDENCE --> SIGN
