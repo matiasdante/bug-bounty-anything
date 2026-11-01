@@ -1,0 +1,9 @@
+# Corrida em operação de uso único (1.9.0)
+
+[English](../RACE-CHECK.md) · [Español](../es/RACE-CHECK.md) · **Português (Brasil)** · [简体中文](../zh/RACE-CHECK.md)
+
+`race-check` / `race_check` testa uma regra de uso único em **dois recursos descartáveis que você possui**. A configuração inclui `schemaVersion: 1`, `class: "single-use-race"`, `policyReference`, `credentialEnv`, `actionUrl`, `actionField`, `controlResourceId`, `raceResourceId`, `controlStateUrl`, `raceStateUrl` e `countPointer`. As três URLs devem ser exatas, distintas e da mesma origem. O escopo precisa de POST JSON para `actionUrl`, GET para as duas URLs de estado, ao menos sete requisições e `minIntervalMs: 0`. As credenciais são lidas de `BBA_TOKEN_*` ou `BBA_COOKIE_*`.
+
+O motor verifica uma contagem inicial igual a zero, executa a ação duas vezes no recurso de controle e exige a rejeição do segundo uso. Se esse controle falhar, **nenhuma corrida é executada**. No segundo recurso, verifica contagem zero, reserva duas requisições do orçamento compartilhado como um par e envia exatamente dois POST concorrentes. `confirmed` exige que ambos sejam aceitos, janelas de envio sobrepostas e contagem final dois. Uma aceitação, contagem final um e janelas sobrepostas resultam em `not-reproduced`; todos os demais casos são `unresolved`. As variantes vulnerável e corrigida são testadas em servidores loopback sintéticos.
+
+`artifact.json` sela o journal para o `artifact-view`. Uma queda deixa reservas incertas; esta verificação nunca retoma nem repete ações que mudam estado. O operador deve possuir, controlar e limpar os dois recursos e estabelecer a regra de uso único. Um efeito duplo local não demonstra impacto financeiro nem outras rotas afetadas. O relatório inclui cinco seções e evidência de estado sem credenciais nem corpos.

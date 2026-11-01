@@ -1,0 +1,9 @@
+# Formulário cross-origin contra estado próprio (1.9.0)
+
+[English](../CSRF-CHECK.md) · [Español](../es/CSRF-CHECK.md) · **Português (Brasil)** · [简体中文](../zh/CSRF-CHECK.md)
+
+`csrf-check` / `csrf_check` usa o Chromium para enviar **um** formulário POST a partir de uma origem de atacante declarada para uma ação numa conta que você controla. Os campos da configuração são `schemaVersion: 1`, `class: "cross-origin-form"`, `policyReference`, `attackerPageUrl`, `stateUrl`, `actionUrl`, `cookieEnv`, `sameSite`, `formField`, `formValue`, `statePointer`, `beforeValue` e `afterValue`. O escopo deve permitir as duas origens, GET para a página do atacante e para o estado, POST de formulário para a ação exata e ao menos cinco requisições. O valor de `BBA_COOKIE_*` vem do ambiente e nunca é persistido.
+
+O motor verifica o estado inicial e a negação anônima. Em seguida abre a página do atacante num contexto de navegador isolado, constrói o formulário simples declarado, confirma que o Chromium envia o cookie e o `Origin` esperados e compara o estado final. `confirmed` exige a transição declarada e uma resposta bem-sucedida. Se o estado não muda e o navegador omite o cookie ou o servidor nega a ação, o resultado é `not-reproduced`; controles incompletos são `unresolved`. Não infere nem força outras configurações SameSite, tokens dinâmicos ou ações não declaradas.
+
+O operador cria e restaura o estado de teste. Chamar o resultado de **CSRF** exige um atacante realmente cross-site e uma ação que, segundo a política, requeira intenção autenticada. Duas portas de laboratório em `127.0.0.1` são origens distintas, mas podem ser o mesmo site; esse laboratório só valida o fluxo de formulário/cookie/estado do motor. `artifact-view` lê o journal selado. Uma queda exige inspeção; a ação não é repetida.
