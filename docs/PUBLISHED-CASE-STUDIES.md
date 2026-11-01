@@ -1,18 +1,16 @@
-# Estudios reproducibles de casos publicados
+# Reproducible studies of published cases
 
-**Español** · [English](PUBLISHED-CASE-STUDIES.en.md)
+**English** · [Español](es/PUBLISHED-CASE-STUDIES.md) · [Português (Brasil)](pt-BR/PUBLISHED-CASE-STUDIES.md) · [简体中文](zh/PUBLISHED-CASE-STUDIES.md)
 
-El primer estudio toma como referencia metodológica [el artículo de Faav sobre Titan](https://blog.faav.net/how-i-couldve-accessed-17-trillion-microsoft-records). El manifiesto `cases/faav-titan-jwt-2026.json` identifica la publicación y la clase de falla; no contiene tokens, datos del servicio ni un objetivo autorizado. La investigación del artículo y una reproducción actual son cosas distintas.
+The first study uses [Faav's Titan article](https://blog.faav.net/how-i-couldve-accessed-17-trillion-microsoft-records) as a method reference. `cases/faav-titan-jwt-2026.json` identifies the publication and bug class but contains no token, service data, or authorized target. A historical investigation and a current reproduction are distinct.
 
-## Recorrido del agente
+## Agent workflow
 
-1. Leer la política vigente del programa y anotar la fuente, ventana, activos, exclusiones, técnicas permitidas, límite de solicitudes y cuenta de prueba propia. Si esto no se puede establecer, detenerse en análisis offline. Una publicación histórica no concede permiso.
-2. Importar Swagger 2.0/OpenAPI JSON con `import-surface --format openapi`. La salida omite cuerpos, ejemplos y secretos; conserva rutas, método, autenticación declarada y procedencia. Registrar pistas históricas estructuradas de una fuente pública en `historical.json` sin asumir que aún estén vigentes.
-3. Armar `policy.json` y `profile.json` con los hechos comprobados. El agente crea estos archivos; el usuario no tiene que escribir JSON. `profile.json` refiere a variables de entorno, una solicitud inocua sobre datos propios y un único hecho JSON protegido. No incluir secretos en los archivos.
-4. Ejecutar `study-bundle` y `study-plan`. El plan selecciona una operación con autenticación declarada opcional junto a una operación protegida del mismo origen, siempre dentro de los prefijos permitidos. Una pista histórica puede desempatar. Si no hay candidato único, el resultado es `unresolved` y se envían cero solicitudes. Revisar `analysis.json`, `scope.json` y `jwt-config.json` antes de la fase activa.
-5. Con el token firmado de la cuenta propia y el cuerpo cargados en el entorno, ejecutar `study-run`. El motor hace cuatro solicitudes con presupuesto compartido: anónima, JWT original, JWT con un claim cambiado y firma anterior, JWT original otra vez. Solo confirma aceptación de esa mutación si el control anónimo se deniega y el mismo hecho protegido se observa con los dos tokens. `resume-study` verifica el bundle y los artefactos originales; no repite intentos inciertos.
-
-Ejemplo de comandos desde el paquete compilado:
+1. Read current program policy and record source, window, assets, exclusions, allowed techniques, request limit, and owned test account. Without these, stop at offline analysis; a publication grants no permission.
+2. Import Swagger 2.0/OpenAPI JSON using `import-surface --format openapi`. It omits bodies, examples, and secrets while retaining routes, methods, declared auth, and provenance. Record structured public historical clues in `historical.json` without assuming validity today.
+3. Create `policy.json` and `profile.json` from verified facts. The agent writes them; the user need not write JSON. Profile refers to environment variables, a harmless query on owned data, and one protected JSON fact. No secrets in files.
+4. Run `study-bundle` and `study-plan`. Planning selects one optionally authenticated operation and one protected operation on the same origin within allowed prefixes; a historical clue may break a tie. With no unique candidate, return `unresolved` and send no requests. Review `analysis.json`, `scope.json`, and `jwt-config.json` before active work.
+5. With signed token and body in the environment, run `study-run`: anonymous, original JWT, changed-claim JWT retaining the old signature, and original JWT again. Confirm only when anonymous is denied and the same owned protected fact appears with both tokens. `resume-study` validates bundle and original artifacts without repeating uncertain attempts.
 
 ```powershell
 node dist/cli.js import-surface --format openapi --input api.json --out runs/surface.json
@@ -22,17 +20,15 @@ node dist/cli.js study-run --input runs/study-input.json --out runs/study-active
 node dist/cli.js resume-study runs/study-active --input runs/study-input.json
 ```
 
-`study-bundle` y `study-plan` son offline. `study-run` y `resume-study` pueden enviar requests. En MCP se llaman `study_bundle`, `study_plan`, `study_run` y `resume_study`; las dos últimas solo aparecen con `--allow-network`. Los archivos de salida deben ser nuevos. Conservar la ruta canónica de `study-input.json`: el presupuesto persistente queda a su lado, en `.bba-budgets/<budgetId>`.
+Bundle and plan are offline; run and resume may send requests. MCP names are `study_bundle`, `study_plan`, `study_run`, and `resume_study`; the last two require `--allow-network`. Outputs must be new. Preserve the canonical path of `study-input.json`, since `.bba-budgets/<budgetId>` is stored alongside it.
 
-## Contratos mínimos
+## Minimum contracts
 
-- `policy.json`: `schemaVersion: 1`, `mode`, `sourceUrl`, `reviewedAt`, `authorization` (`reference`, `validFrom`, `validUntil`), `assets` y `excluded` como `{origin,pathPrefixes}`, `techniques: ["jwt-signature-integrity"]`, `budgetId` y `limits` del scope. Los prefijos son segmentos de ruta; una exclusión gana. El motor valida el formato y el tiempo, pero la legitimidad de la política declarada la verifica el investigador.
-- `historical.json`: `schemaVersion: 1`, `sourceUrl`, `capturedAt`, `routes: [{path,clue}]`; `clue` vale `routing-definition` o `endpoint-reference`. La fuente histórica solo sugiere dónde mirar.
-- `profile.json`: `schemaVersion: 1`, `credentialEnv` (`BBA_TOKEN_*`), `proofPointer`, `request` y `mutation` del [contrato JWT](JWT-INTEGRITY.md). Para POST, el cuerpo va en `BBA_BODY_*`; elegí un query inocuo y una cuenta propia. El hecho señalado por `proofPointer` debe ser estable y privado.
-- `runs/study-input.json`: bundle validado y portable que contiene los cinco insumos. `runs/study-plan/analysis.json`: candidatos y grafo con fuentes, operaciones e hipótesis; `scope.json` y `jwt-config.json` se crean solo con un candidato único. `runs/study-active/report.md`: borrador de cinco preguntas generado al completar la prueba.
+- `policy.json`: `schemaVersion: 1`, `mode`, `sourceUrl`, `reviewedAt`, `authorization` (`reference`, `validFrom`, `validUntil`), `assets` and `excluded` as `{origin,pathPrefixes}`, `techniques: ["jwt-signature-integrity"]`, `budgetId`, and scope `limits`. Exclusions win. Format and time are validated; the investigator verifies policy legitimacy.
+- `historical.json`: `schemaVersion: 1`, `sourceUrl`, `capturedAt`, and `routes: [{path,clue}]`, where `clue` is `routing-definition` or `endpoint-reference`. Historical sources suggest where to look.
+- `profile.json`: `schemaVersion: 1`, `credentialEnv` (`BBA_TOKEN_*`), `proofPointer`, `request`, and `mutation` per the [JWT contract](JWT-INTEGRITY.md). POST bodies use `BBA_BODY_*`; choose owned data and a stable private fact.
+- `study-input.json`: validated portable bundle of five inputs. `study-plan/analysis.json` contains candidates and a provenance graph; scope and JWT config require one unique candidate. `study-active/report.md` is a five-question draft.
 
-## Qué puede afirmar el reporte
+## Report claims
 
-El borrador responde **qué es**, **cómo se encontró**, **demostración de explotación**, **cómo reproducirlo** y **cómo corregirlo**. Incluye IDs de evidencia y límites. `confirmed` prueba aceptación del JWT alterado para la cuenta y el hecho declarados. No prueba privilegios de otra identidad, lectura masiva, severidad determinada ni que el servicio del artículo siga vulnerable. `not-reproduced` solo descarta la mutación probada. El reporte queda local y requiere revisión antes de enviarlo al programa.
-
-Este MVP contiene una clase de hipótesis y un candidato por ejecución. No automatiza recon general, inferencia de identidades o claims, ni los casos Kia, carrera o cache previstos para bloques posteriores.
+The draft covers the issue, discovery, exploit proof, reproduction, and remediation, with evidence IDs and limits. `confirmed` shows acceptance of the altered JWT for the declared account/fact. It does not show other identities' privileges, bulk reads, severity, or that the article's target remains vulnerable. `not-reproduced` excludes only the tested mutation. Reports remain local for review before submission. This MVP handles one hypothesis class and one candidate per run; it does not automate broad reconnaissance or identity/claim inference.

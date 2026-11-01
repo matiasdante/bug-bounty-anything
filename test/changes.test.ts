@@ -336,8 +336,8 @@ test('Change #11: multi-client setupMcp (claude & gemini) with backup/replace gu
     assert.equal(zipBytes.readUInt32LE(0), 0x04034b50);
     assert.ok(zipBytes.includes(Buffer.from('bug-bounty-anything/SKILL.md')));
     assert.ok(zipBytes.includes(Buffer.from('bug-bounty-anything/SKILL.es.md')));
-    assert.ok(zipBytes.includes(Buffer.from('bug-bounty-anything/README.en.md')));
-    assert.ok(zipBytes.includes(Buffer.from('bug-bounty-anything/docs/ROADMAP.en.md')));
+    assert.ok(zipBytes.includes(Buffer.from('bug-bounty-anything/docs/readme/README_es.md')));
+    assert.ok(zipBytes.includes(Buffer.from('bug-bounty-anything/docs/es/ROADMAP.md')));
     assert.ok(zipBytes.includes(Buffer.from('bug-bounty-anything/INSTALL-CLAUDE-CODE.md')));
     assert.ok(zipBytes.includes(Buffer.from('bug-bounty-anything/INSTALL-CLAUDE-CODE.es.md')));
     assert.throws(() => packageSkill({ outputPath: zipPath, includeNodeModules: false }), /Archive already exists/);

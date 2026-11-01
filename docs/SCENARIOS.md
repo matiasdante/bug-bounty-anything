@@ -1,35 +1,31 @@
-# Escenarios controlados con sesión real de navegador
+# Controlled scenarios with a real browser session
 
-**Español** · [English](SCENARIOS.en.md)
+**English** · [Español](es/SCENARIOS.md) · [Português (Brasil)](pt-BR/SCENARIOS.md) · [简体中文](zh/SCENARIOS.md)
 
 ```powershell
 node dist/cli.js browser-scenario --scope scope.json --config scenario.json --out runs/scenario
 ```
 
-MCP: `browser_scenario`, solo con red habilitada. Ejecuta un flujo declarado en un contexto Chromium efímero: navegación, llenado de campos, click y espera de un selector visible. Las cookies de login y su rotación se aplican en memoria con los atributos Set-Cookie reales. La salida describe observaciones; no declara automáticamente una vulnerabilidad.
+MCP: `browser_scenario`, only with network enabled. It runs a declared workflow in an ephemeral Chromium context: navigation, filling fields, clicking, and waiting for a visible selector. Login cookies and rotation are applied in memory from real Set-Cookie attributes. Output records observations, not an automatic vulnerability claim.
 
-## Contrato
+## Contract
 
-`scenario.json` tiene exactamente `schemaVersion: 1`, `policyReference`, `boundary: "controlled-workflow"`, `sessionOrigin`, `plan`, `actions`, `maxRedirects` y `observe`.
+`scenario.json` has exactly `schemaVersion: 1`, `policyReference`, `boundary: "controlled-workflow"`, `sessionOrigin`, `plan`, `actions`, `maxRedirects`, and `observe`.
 
-- `sessionOrigin`: origen permitido al que se pueden devolver cookies/Bearer generados por el navegador.
-- `plan`: contrato de `run`, con hasta 100 requests conocidas. Todas tienen `credentialEnv: null`: las credenciales de sesión vienen del navegador. Los datos de login se ingresan con acciones y bodies del entorno. Fuera de `sessionOrigin` solo se admiten GET y no se reenvían credenciales.
-- `actions`: de 1 a 30, empezando por navigate. Formas: `{ "kind": "navigate", "stepId": "home" }`, `{ "kind": "fill", "selector": "#username", "valueEnv": "BBA_INPUT_USER" }`, `{ "kind": "click", "selector": "#submit" }` y `{ "kind": "wait", "selector": "#dashboard" }`.
-- `maxRedirects`: de 0 a 5. Cada destino debe coincidir con una request declarada; el método y body del salto también deben coincidir cuando Chromium lo solicita.
-- `observe`: hasta 20 entradas `{ "name": "identity", "selector": "#identity", "attribute": null }`. Con null se toma textContent; también se puede elegir un atributo. Se conserva presencia/digest y si se truncó a 4096 caracteres.
+- `sessionOrigin` is the allowed origin to which browser-generated cookies/Bearer may return.
+- `plan` is the `run` contract with up to 100 known requests, all with `credentialEnv: null`. Session credentials come from the browser; login data comes from actions and environment-bound bodies. Outside `sessionOrigin`, only GET is allowed and credentials are withheld.
+- `actions` contains 1–30 items, starting with navigate. Forms include `{ "kind": "navigate", "stepId": "home" }`, `{ "kind": "fill", "selector": "#username", "valueEnv": "BBA_INPUT_USER" }`, `{ "kind": "click", "selector": "#submit" }`, and `{ "kind": "wait", "selector": "#dashboard" }`.
+- `maxRedirects` is 0–5. Every destination must match a declared request, including method and body when Chromium supplies them.
+- `observe` has up to 20 `{ "name": "identity", "selector": "#identity", "attribute": null }` entries. Null reads textContent; an attribute may be selected instead. Presence, digest, and truncation at 4,096 characters are retained.
 
-Las requests se comparan con URL completa, método y bytes del body antes de enviarse. Por ejemplo, un formulario conocido puede usar un paso POST con `body: { "format": "form", "valueEnv": "BBA_BODY_LOGIN" }` y acciones fill con `BBA_INPUT_USER` / `BBA_INPUT_PASSWORD`. El body esperado debe representar exactamente la serialización del formulario, incluyendo orden, encoding y campos ocultos. Inputs faltantes, bodies distintos o dinámicos sin binding quedan bloqueados. POST/PUT/PATCH/DELETE necesitan reglas explícitas del scope, recursos propios y cleanup cuando cambian estado.
+Complete URL, method, and body bytes are matched before sending. A known form may use `body: { "format": "form", "valueEnv": "BBA_BODY_LOGIN" }` and fill actions with `BBA_INPUT_USER` / `BBA_INPUT_PASSWORD`. Expected body must match form serialization exactly, including order, encoding, and hidden fields. Missing inputs or different/dynamic unbound bodies are blocked. POST/PUT/PATCH/DELETE need explicit scope rules, owned resources, and cleanup for state changes.
 
-## Aislamiento y fidelidad
+## Isolation and fidelity
 
-Se usa CDP Fetch para interceptar también cada salto de redirect: las rutas de Playwright solo cubren la primera URL de una cadena. No se desactiva la política de red del navegador ni se permite que siga destinos directamente. El proxy sumidero y la política WebRTC siguen activos; service workers y WebSockets están bloqueados, y no se aceptan descargas.
+CDP Fetch intercepts every redirect hop; Playwright routes alone cover only the first URL. Browser network policy remains active and direct redirect following is disallowed. Rejecting proxy and WebRTC policy remain active; service workers, WebSockets, and downloads are blocked. The relay sends selected Set-Cookie and CSP/CORS headers back to Chromium. It forwards browser-produced cookies/Bearer only to `sessionOrigin`, never uses a personal browser profile, persists a session, or sends those headers to another origin. Login forms, dynamic tokens, and SSO domains are not inferred; extra windows/providers need explicit definitions.
 
-El relay devuelve Set-Cookie y los headers de CSP/CORS seleccionados al navegador. Solo reenvía las cookies o Bearer que el navegador produjo para `sessionOrigin`; no carga cookies del perfil personal, no persiste la sesión y no transfiere sus headers a otro origen. No se infieren logins, formularios, tokens dinámicos o dominios de SSO. Nuevas ventanas y proveedores externos necesitan otra definición explícita; no amplían alcance.
+Queries, expected bodies, and fill values come from the environment. Never place credentials in selectors, IDs, base URLs, or references. Steps can project JSON response facts like `run`. There is no resumable browser session checkpoint: after a crash, budget/reservations remain but the session is lost.
 
-Los parámetros de query, cuerpos esperados y valores de fill se leen del entorno. No deben ponerse credenciales en selectores, IDs, URLs base o referencias. Los pasos pueden proyectar hechos JSON de las respuestas, igual que `run`. El escenario no crea checkpoints reanudables de la sesión: una caída conserva reservas y presupuesto, pero la sesión se pierde.
+## Artifacts
 
-## Artefactos
-
-`scope.json` y `config.json` conservan referencias, sin valores. `requests.jsonl` sincroniza cada reserva antes del envío y guarda metadatos/facts, acciones completadas y errores de red con códigos sanitizados. `scenario.json` contiene resultado, conteos, hechos DOM y checksum. `artifact.json` sella journal, resultado y fuentes para vistas paginadas con `artifact-view`. No se guardan cuerpos, passwords, cookies ni tokens.
-
-Una acción completada o un cambio de DOM describe el flujo observado, no su seguridad. Para informar un bug hace falta establecer la regla esperada, controles, identidad/estado e impacto con las evidencias pertinentes. Las pruebas locales verifican login por formulario, redirect, dos cookies, rotación posterior, lectura autenticada, redacción y rechazo de requests no declaradas.
+`scope.json` and `config.json` retain references, not values. `requests.jsonl` synchronizes reservations before sending and stores metadata/facts, completed actions, and sanitized network errors. `scenario.json` stores outcomes, counts, DOM facts, and checksum. `artifact.json` seals journal, result, and sources for paginated `artifact-view`. Bodies, passwords, cookies, and tokens are never saved. A completed action or DOM change shows observed behavior, not security. A report needs an expected rule, controls, identity/state, and impact evidence. Local tests cover form login, redirects, two cookies, rotation, authenticated read, redaction, and undeclared-request blocking.

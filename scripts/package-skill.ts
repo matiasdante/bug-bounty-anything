@@ -202,7 +202,6 @@ export function packageSkill(options: { projectRoot?: string; outputPath?: strin
     'package.json',
     'package-lock.json',
     'README.md',
-    'README.en.md',
     'SKILL.es.md',
     'dist',
     'docs',
